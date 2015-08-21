@@ -113,19 +113,24 @@ public:
   unsigned long GetUpdateTime();
 
   // Description:
-  // Return the actual size of the data in kilobytes. This number
+  // Return the actual size of the data in kibibytes (1024 bytes). This number
   // is valid only after the pipeline has updated. The memory size
   // returned is guaranteed to be greater than or equal to the
   // memory required to represent the data (e.g., extra space in
   // arrays, etc. are not included in the return value).
   virtual unsigned long GetActualMemorySize();
 
-   // Description:
-   // Copy information about this data object from the
-   // pipeline information to its own Information.
-  // Called right before the main execution pass..
+  // Description:
+  // Copy from the pipeline information to the data object's own information.
+  // Called right before the main execution pass.
   virtual void CopyInformationFromPipeline(vtkInformation* vtkNotUsed(info))
   {}
+
+  // Description:
+  // Copy information from this data object to the pipeline information.
+  // This is used by the vtkTrivialProducer that is created when someone
+  // calls SetInputData() to connect a data object to a pipeline.
+  virtual void CopyInformationToPipeline(vtkInformation* vtkNotUsed(info)) {}
 
   // Description:
   // Return the information object within the input information object's

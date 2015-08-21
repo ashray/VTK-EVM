@@ -5,6 +5,9 @@ endif()
 if(POLICY CMP0025)
   cmake_policy(SET CMP0025 NEW) # CMake 3.0
 endif()
+if(POLICY CMP0043)
+  cmake_policy(SET CMP0043 NEW) # CMake 3.0
+endif()
 if(POLICY CMP0053)
   cmake_policy(SET CMP0053 NEW) # CMake 3.1
 endif()
@@ -17,7 +20,6 @@ find_package(VTK COMPONENTS
   vtkGUISupportQt
   vtkGUISupportQtOpenGL
   vtkIOInfovis
-  vtkRenderingFreeTypeOpenGL
   vtkViewsInfovis
 )
 include(${VTK_USE_FILE})
@@ -57,7 +59,7 @@ set( QRCs
 set(CMAKE_AUTOMOC ON)
 
 if(VTK_QT_VERSION VERSION_GREATER "4")
-  find_package(Qt5WebKitWidgets REQUIRED QUIET)
+  find_package(Qt5 COMPONENTS WebKitWidgets REQUIRED QUIET)
 
   qt5_add_resources(QRC_Srcs ${QRCs} )
 

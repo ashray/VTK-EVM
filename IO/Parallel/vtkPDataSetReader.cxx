@@ -71,27 +71,18 @@ void vtkPDataSetReader::SetNumberOfPieces(int num)
   // Delete the previous file names/extents.
   for (i = 0; i < this->NumberOfPieces; ++i)
     {
-    if (this->PieceFileNames[i])
-      {
-      delete [] this->PieceFileNames[i];
-      this->PieceFileNames[i] = NULL;
-      }
+    delete [] this->PieceFileNames[i];
+    this->PieceFileNames[i] = NULL;
     if (this->PieceExtents && this->PieceExtents[i])
       {
       delete [] this->PieceExtents[i];
       this->PieceExtents[i] = NULL;
       }
     }
-  if (this->PieceFileNames)
-    {
-    delete [] this->PieceFileNames;
-    this->PieceFileNames = NULL;
-    }
-  if (this->PieceExtents)
-    {
-    delete [] this->PieceExtents;
-    this->PieceExtents = NULL;
-    }
+  delete [] this->PieceFileNames;
+  this->PieceFileNames = NULL;
+  delete [] this->PieceExtents;
+  this->PieceExtents = NULL;
   this->NumberOfPieces = 0;
 
 
@@ -661,16 +652,14 @@ void vtkPDataSetReader::ReadVTKFileInformation(
 
   vtkInformation* info = outputVector->GetInformationObject(0);
 
-  // To avoid UMR in the first string comparison
-  strcpy(str, "        ");
-
   // Try to find the line that specifies the dataset type.
   i = 0;
-  while (strncmp(str, "DATASET", 7) != 0 && i < 6)
+  do
     {
     file->getline(str, 1024);
     ++i;
     }
+  while (strncmp(str, "DATASET", 7) != 0 && i < 6);
 
   if (strncmp(str, "DATASET POLYDATA", 16) == 0)
     {
@@ -864,10 +853,7 @@ ifstream *vtkPDataSetReader::OpenFile(const char* filename)
 
   if (! file || file->fail())
     {
-    if (file)
-      {
-      delete file;
-      }
+    delete file;
     vtkErrorMacro(<< "Initialize: Could not open file " << filename);
     return NULL;
     }
@@ -1194,7 +1180,7 @@ int vtkPDataSetReader::ImageDataExecute(
     et->PieceToExtent();
     int zeroExt[6];
     et->GetExtent(zeroExt);
-    output->GenerateGhostLevelArray(zeroExt);
+    output->GenerateGhostArray(zeroExt);
     }
 
   return 1;
@@ -1388,7 +1374,7 @@ int vtkPDataSetReader::StructuredGridExecute(
     et->PieceToExtent();
     int zeroExt[6];
     et->GetExtent(zeroExt);
-    output->GenerateGhostLevelArray(zeroExt);
+    output->GenerateGhostArray(zeroExt);
     }
 
   return 1;

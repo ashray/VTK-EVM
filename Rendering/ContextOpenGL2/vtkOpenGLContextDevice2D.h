@@ -30,14 +30,22 @@
 #include "vtkRenderingContextOpenGL2Module.h" // For export macro
 #include "vtkContextDevice2D.h"
 
+#include <vector> // STL Header
 #include <list> // for std::list
 
+class vtkMatrix4x4;
 class vtkWindow;
 class vtkViewport;
 class vtkRenderer;
 class vtkStringToImage;
 class vtkOpenGLRenderWindow;
 class vtkOpenGLExtensionManager;
+class vtkTransform;
+class vtkShaderProgram;
+namespace vtkgl
+{
+class CellBO;
+}
 
 class VTKRENDERINGCONTEXTOPENGL2_EXPORT vtkOpenGLContextDevice2D : public vtkContextDevice2D
 {
@@ -55,6 +63,14 @@ public:
   // which has nc_comps components
   virtual void DrawPoly(float *f, int n, unsigned char *colors = 0,
                         int nc_comps = 0);
+
+  // Description:
+  // Draw lines using the points - memory layout is as follows:
+  // l1p1,l1p2,l2p1,l2p2... The lines will be colored by colors array
+  // which has nc_comps components.
+  // \sa DrawPoly()
+  virtual void DrawLines(float *f, int n, unsigned char *colors = 0,
+                         int nc_comps = 0);
 
   // Description:
   // Draw a series of points - fastest code path due to memory
@@ -272,6 +288,11 @@ public:
   // resources to release.
   virtual void ReleaseGraphicsResources(vtkWindow *window);
 
+  // Description:
+  // Get the projection matrix this is needed
+  vtkMatrix4x4 *GetProjectionMatrix();
+  vtkMatrix4x4 *GetModelMatrix();
+
 //BTX
 protected:
   vtkOpenGLContextDevice2D();
@@ -313,6 +334,24 @@ protected:
   // The OpenGL render window being used by the device
   vtkOpenGLRenderWindow* RenderWindow;
 
+  vtkgl::CellBO *VCBO;  // vertex + color
+  void ReadyVCBOProgram();
+  vtkgl::CellBO *VBO;  // vertex
+  void ReadyVBOProgram();
+  vtkgl::CellBO *VTBO;  // vertex + tcoord
+  void ReadyVTBOProgram();
+  vtkgl::CellBO *SCBO;  // sprite + color
+  void ReadySCBOProgram();
+  vtkgl::CellBO *SBO;  // sprite
+  void ReadySBOProgram();
+
+  void SetMatrices(vtkShaderProgram *prog);
+  void BuildVBO(vtkgl::CellBO *cbo,
+    float *v, int nv,
+    unsigned char *coolors, int nc,
+    float *tcoords);
+  void CoreDrawTriangles(std::vector<float> &tverts);
+
 private:
   vtkOpenGLContextDevice2D(const vtkOpenGLContextDevice2D &); // Not implemented.
   void operator=(const vtkOpenGLContextDevice2D &);   // Not implemented.
@@ -336,6 +375,9 @@ private:
       return this->Key == key;
     }
   };
+
+  vtkTransform *ProjectionMatrix;
+  vtkTransform *ModelMatrix;
 
   std::list<vtkMarkerCacheObject> MarkerCache;
   int MaximumMarkerCacheSize;

@@ -261,7 +261,7 @@ public:
   virtual void Crop(const int* updateExtent);
 
   // Description:
-  // Return the actual size of the data in kilobytes. This number
+  // Return the actual size of the data in kibibytes (1024 bytes). This number
   // is valid only after the pipeline has updated. The memory size
   // returned is guaranteed to be greater than or equal to the
   // memory required to represent the data (e.g., extra space in
@@ -304,6 +304,12 @@ public:
   // Override these to handle origin, spacing, scalar type, and scalar
   // number of components.  See vtkDataObject for details.
   virtual void CopyInformationFromPipeline(vtkInformation* information);
+
+  // Description:
+  // Copy information from this data object to the pipeline information.
+  // This is used by the vtkTrivialProducer that is created when someone
+  // calls SetInputData() to connect the image to a pipeline.
+  virtual void CopyInformationToPipeline(vtkInformation* information);
 
   // Description:
   // make the output data ready for new data to be inserted. For most

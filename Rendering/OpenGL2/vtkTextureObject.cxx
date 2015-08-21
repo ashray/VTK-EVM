@@ -97,11 +97,11 @@ static const char *DepthTextureCompareFunctionAsString[8]=
   //----------------------------------------------------------------------------
   static GLenum OpenGLAlphaInternalFormat[5]=
   {
-    GL_ALPHA,
-    GL_ALPHA4,
-    GL_ALPHA8,
-    GL_ALPHA12,
-    GL_ALPHA16
+    GL_R8,
+    GL_R8,
+    GL_R16,
+    GL_R16F,
+    GL_R32F
   };
 
 #else
@@ -122,13 +122,14 @@ static const char *DepthTextureCompareFunctionAsString[8]=
   };
 
   //----------------------------------------------------------------------------
+  // Should be GL_RED but that requires an extension for ES 2.0
   static GLenum OpenGLAlphaInternalFormat[5]=
   {
-    GL_ALPHA,
-    GL_ALPHA,
-    GL_ALPHA,
-    GL_ALPHA,
-    GL_ALPHA
+    GL_LUMINANCE,
+    GL_LUMINANCE,
+    GL_LUMINANCE,
+    GL_LUMINANCE,
+    GL_LUMINANCE
   };
 
 #endif
@@ -250,6 +251,7 @@ vtkTextureObject::vtkTextureObject()
   this->BorderColor[1] = 0.0f;
   this->BorderColor[2] = 0.0f;
   this->BorderColor[3] = 0.0f;
+  this->BufferObject = 0;
 
   this->ResetFormatAndType();
 }
@@ -267,10 +269,15 @@ bool vtkTextureObject::IsSupported(vtkOpenGLRenderWindow* vtkNotUsed(win),
       bool requireTexInt)
 {
 #if GL_ES_VERSION_2_0 != 1
+  if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+    {
+    return true;
+    }
   bool texFloat = true;
   if (requireTexFloat)
     {
-    texFloat = (glewIsSupported("GL_ARB_texture_float") != 0);
+    texFloat = (glewIsSupported("GL_ARB_texture_float") != 0
+     && glewIsSupported("GL_ARB_texture_rg") != 0);
     }
 
   bool depthFloat = true;
@@ -303,14 +310,24 @@ bool vtkTextureObject::IsSupported(vtkOpenGLRenderWindow* vtkNotUsed(win),
 bool vtkTextureObject::LoadRequiredExtensions(vtkOpenGLRenderWindow *renWin)
 {
 #if GL_ES_VERSION_2_0 != 1
-  this->SupportsTextureInteger =
-    (glewIsSupported("GL_EXT_texture_integer") != 0);
+  if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+    {
+    this->SupportsTextureInteger = true;
+    this->SupportsTextureFloat = true;
+    this->SupportsDepthBufferFloat = true;
+    }
+  else
+    {
+    this->SupportsTextureInteger =
+      (glewIsSupported("GL_EXT_texture_integer") != 0);
 
-  this->SupportsTextureFloat =
-    (glewIsSupported("GL_ARB_texture_float") != 0);
+    this->SupportsTextureFloat =
+      (glewIsSupported("GL_ARB_texture_float") != 0 &&
+       glewIsSupported("GL_ARB_texture_rg") != 0);
 
-  this->SupportsDepthBufferFloat =
-    (glewIsSupported("GL_ARB_depth_buffer_float") != 0);
+    this->SupportsDepthBufferFloat =
+      (glewIsSupported("GL_ARB_depth_buffer_float") != 0);
+    }
 #else
   // some of these may have extensions etc for ES 2.0
   // setting to false right now as I do not know
@@ -402,7 +419,11 @@ void vtkTextureObject::CreateTexture()
     vtkOpenGLCheckErrorMacro("failed at glGenTextures");
     this->Handle=tex;
 
+#if defined(GL_TEXTURE_BUFFER)
+    if (this->Target && this->Target != GL_TEXTURE_BUFFER)
+#else
     if (this->Target)
+#endif
       {
       glBindTexture(this->Target, this->Handle);
       vtkOpenGLCheckErrorMacro("failed at glBindTexture");
@@ -476,11 +497,10 @@ void vtkTextureObject::ReleaseGraphicsResources(vtkWindow *win)
   vtkOpenGLRenderWindow *rwin =
    vtkOpenGLRenderWindow::SafeDownCast(win);
 
-  // It is almost guarenteed that in case of valid handle, we will have
-  // value other than zero. A check like this may be required at other
-  // places as well.
-  if (this->Handle && rwin)
+  if (rwin && this->Handle)
     {
+    rwin->MakeCurrent();
+
     rwin->ActivateTexture(this);
     this->UnBind();
     rwin->DeactivateTexture(this);
@@ -489,6 +509,7 @@ void vtkTextureObject::ReleaseGraphicsResources(vtkWindow *win)
     this->Handle = 0;
     this->NumberOfDimensions = 0;
     this->Target =0;
+    this->InternalFormat = 0;
     this->Format = 0;
     this->Type = 0;
     this->Components = 0;
@@ -549,6 +570,11 @@ bool vtkTextureObject::IsBound()
         target=GL_TEXTURE_BINDING_3D;
         break;
 #endif
+#if defined(GL_TEXTURE_BUFFER) && defined(GL_TEXTURE_BINDING_BUFFER)
+      case GL_TEXTURE_BUFFER:
+        target=GL_TEXTURE_BINDING_BUFFER;
+        break;
+#endif
       default:
         assert("check: impossible case" && 0);
         break;
@@ -564,6 +590,13 @@ bool vtkTextureObject::IsBound()
 void vtkTextureObject::SendParameters()
 {
   assert("pre: is_bound" && this->IsBound());
+
+#if defined(GL_TEXTURE_BUFFER)
+  if (this->Target == GL_TEXTURE_BUFFER)
+    {
+    return;
+    }
+#endif
 
   glTexParameteri(this->Target,GL_TEXTURE_WRAP_S, OpenGLWrap[this->WrapS]);
   glTexParameteri(this->Target,GL_TEXTURE_WRAP_T, OpenGLWrap[this->WrapT]);
@@ -632,15 +665,6 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
     return this->InternalFormat;
     }
 
-  // 1 or 2 components not supported as render target in FBO on GeForce<8
-  // force internal format component to be 3 or 4, even if client format is 1
-  // or 2 components.
-  // see spec 2.1 page 137 (pdf page 151) in section 3.6.4 Rasterization of
-  // Pixel Rectangles: "Conversion to RGB": this step is applied only if
-  // the format is LUMINANCE or LUMINANCE_ALPHA:
-  // L: R=L, G=L, B=L
-  // LA: R=L, G=L, B=L, A=A
-
   // pre-condition
   if(vtktype==VTK_VOID && numComps != 1)
     {
@@ -649,12 +673,7 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
     this->InternalFormat = 0;
     return this->InternalFormat;
     }
-  const bool oldGeForce=!this->SupportsTextureInteger;
 
-  if(oldGeForce && numComps<3)
-    {
-    numComps+=2;
-    }
   // DON'T DEAL WITH VTK_CHAR as this is platform dependent.
   switch (vtktype)
     {
@@ -668,10 +687,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE8I_EXT;
+            this->InternalFormat = GL_R8I;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA8I_EXT;
+            this->InternalFormat = GL_RG8I;
             break;
           case 3:
             this->InternalFormat = GL_RGB8I_EXT;
@@ -686,10 +705,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE8;
+            this->InternalFormat = GL_R8;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE8_ALPHA8;
+            this->InternalFormat = GL_RG8;
             break;
           case 3:
             this->InternalFormat = GL_RGB8;
@@ -706,10 +725,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE8UI_EXT;
+            this->InternalFormat = GL_R8UI;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA8UI_EXT;
+            this->InternalFormat = GL_RG8UI;
             break;
           case 3:
             this->InternalFormat = GL_RGB8UI_EXT;
@@ -724,10 +743,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE8;
+            this->InternalFormat = GL_R8;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE8_ALPHA8;
+            this->InternalFormat = GL_RG8;
             break;
           case 3:
             this->InternalFormat = GL_RGB8;
@@ -744,10 +763,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE16I_EXT;
+            this->InternalFormat = GL_R16I;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA16I_EXT;
+            this->InternalFormat = GL_RG16I;
             break;
           case 3:
             this->InternalFormat = GL_RGB16I_EXT;
@@ -764,9 +783,8 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           case 1:
             if(this->SupportsTextureFloat)
               {
-              this->InternalFormat = GL_LUMINANCE32F_ARB;
+              this->InternalFormat = GL_R32F;
               break;
-  //            this->InternalFormat = GL_LUMINANCE16; // not supported as a render target
               }
             else
               {
@@ -777,9 +795,8 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           case 2:
             if(this->SupportsTextureFloat)
               {
-              this->InternalFormat = GL_LUMINANCE_ALPHA32F_ARB;
+              this->InternalFormat = GL_RG32F;
               break;
-              //            this->InternalFormat = GL_LUMINANCE16_ALPHA16; // not supported as a render target
               }
             else
               {
@@ -802,10 +819,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE16UI_EXT;
+            this->InternalFormat = GL_R16UI;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA16UI_EXT;
+            this->InternalFormat = GL_RG16UI;
             break;
           case 3:
             this->InternalFormat = GL_RGB16UI_EXT;
@@ -822,9 +839,8 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           case 1:
             if(this->SupportsTextureFloat)
               {
-              this->InternalFormat = GL_LUMINANCE32F_ARB;
+              this->InternalFormat = GL_R32F;
               break;
-  //      this->InternalFormat = GL_LUMINANCE16; // not supported as a render target
               }
             else
               {
@@ -835,9 +851,8 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           case 2:
             if(this->SupportsTextureFloat)
               {
-              this->InternalFormat = GL_LUMINANCE_ALPHA32F_ARB;
+              this->InternalFormat = GL_RG32F;
               break;
-  //      this->InternalFormat = GL_LUMINANCE16_ALPHA16; // not supported as a render target
               }
             else
               {
@@ -860,10 +875,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE32I_EXT;
+            this->InternalFormat = GL_R32I;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA32I_EXT;
+            this->InternalFormat = GL_RG32I;
             break;
           case 3:
             this->InternalFormat = GL_RGB32I_EXT;
@@ -880,10 +895,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           switch (numComps)
             {
             case 1:
-              this->InternalFormat = GL_LUMINANCE32F_ARB;
+              this->InternalFormat = GL_R32F;
               break;
             case 2:
-              this->InternalFormat = GL_LUMINANCE_ALPHA32F_ARB;
+              this->InternalFormat = GL_RG32F;
               break;
             case 3:
               this->InternalFormat = GL_RGB32F_ARB;
@@ -906,10 +921,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE32UI_EXT;
+            this->InternalFormat = GL_R32UI;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA32UI_EXT;
+            this->InternalFormat = GL_RG32UI;
             break;
           case 3:
             this->InternalFormat = GL_RGB32UI_EXT;
@@ -926,10 +941,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
           switch (numComps)
             {
             case 1:
-              this->InternalFormat = GL_LUMINANCE32F_ARB;
+              this->InternalFormat = GL_R32F;
               break;
             case 2:
-              this->InternalFormat = GL_LUMINANCE_ALPHA32F_ARB;
+              this->InternalFormat = GL_RG32F;
               break;
             case 3:
               this->InternalFormat = GL_RGB32F_ARB;
@@ -952,10 +967,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
         switch (numComps)
           {
           case 1:
-            this->InternalFormat = GL_LUMINANCE32F_ARB;
+            this->InternalFormat = GL_R32F;
             break;
           case 2:
-            this->InternalFormat = GL_LUMINANCE_ALPHA32F_ARB;
+            this->InternalFormat = GL_RG32F;
             break;
           case 3:
             this->InternalFormat = GL_RGB32F_ARB;
@@ -1009,10 +1024,10 @@ unsigned int vtkTextureObject::GetInternalFormat(int vtktype, int numComps,
       switch (numComps)
         {
         case 1:
-          this->InternalFormat = GL_LUMINANCE;
+          this->InternalFormat = GL_LUMINANCE; // GL_RED
           break;
         case 2:
-          this->InternalFormat = GL_LUMINANCE_ALPHA;
+          this->InternalFormat = GL_LUMINANCE_ALPHA; // GL_RG
           break;
         case 3:
           this->InternalFormat = GL_RGB;
@@ -1069,10 +1084,10 @@ unsigned int vtkTextureObject::GetFormat(int vtktype, int numComps,
     switch (numComps)
       {
       case 1:
-        this->Format = GL_LUMINANCE_INTEGER_EXT;
+        this->Format = GL_RED_INTEGER;
         break;
       case 2:
-        this->Format = GL_LUMINANCE_ALPHA_INTEGER_EXT;
+        this->Format = GL_RG_INTEGER;
         break;
       case 3:
         this->Format = GL_RGB_INTEGER_EXT;
@@ -1083,7 +1098,23 @@ unsigned int vtkTextureObject::GetFormat(int vtktype, int numComps,
       }
     }
   else
-#endif
+    {
+    switch (numComps)
+      {
+      case 1:
+        this->Format = GL_RED;
+        break;
+      case 2:
+        this->Format = GL_RG;
+        break;
+      case 3:
+        this->Format = GL_RGB;
+        break;
+      case 4:
+        this->Format = GL_RGBA;
+        break;
+      }
+#else
     {
     switch (numComps)
       {
@@ -1100,6 +1131,7 @@ unsigned int vtkTextureObject::GetFormat(int vtktype, int numComps,
         this->Format = GL_RGBA;
         break;
       }
+#endif
     }
   return this->Format;
 }
@@ -1182,6 +1214,12 @@ static int vtkGetVTKType(GLenum gltype)
     }
 
   return 0;
+}
+
+//----------------------------------------------------------------------------
+int vtkTextureObject::GetVTKDataType()
+{
+  return ::vtkGetVTKType(this->Type);
 }
 
 //----------------------------------------------------------------------------
@@ -1406,7 +1444,7 @@ bool vtkTextureObject::CreateAlphaFromRaw(unsigned int width,
     }
 
   this->Target = GL_TEXTURE_1D;
-  this->Format = GL_ALPHA;
+  this->Format = GL_RED;
   this->Width = width;
   this->Height = 1;
   this->Depth = 1;
@@ -1423,6 +1461,63 @@ bool vtkTextureObject::CreateAlphaFromRaw(unsigned int width,
   vtkOpenGLCheckErrorMacro("failed at glTexImage1D");
   this->UnBind();
   return true;
+}
+
+// Description:
+// Create a texture buffer basically a 1D texture that can be
+// very large for passing data into the fragment shader
+bool vtkTextureObject::CreateTextureBuffer(unsigned int numValues, int numComps,
+                         int dataType, vtkgl::BufferObject *bo)
+{
+  assert(this->Context);
+
+  // Now, detemine texture parameters using the arguments.
+  this->GetDataType(dataType);
+  this->GetInternalFormat(dataType, numComps, false);
+  this->GetFormat(dataType, numComps, false);
+
+  if (!this->InternalFormat || !this->Format || !this->Type)
+    {
+    vtkErrorMacro("Failed to detemine texture parameters.");
+    return false;
+    }
+
+  this->Target = GL_TEXTURE_BUFFER;
+  this->Components = numComps;
+  this->Width = numValues;
+  this->Height = 1;
+  this->Depth = 1;
+  this->NumberOfDimensions = 1;
+  this->BufferObject = bo;
+
+  this->CreateTexture();
+  this->Bind();
+
+  // Source texture data from the PBO.
+  glTexBuffer(
+      this->Target,
+      this->InternalFormat,
+      this->BufferObject->GetHandle());
+
+  vtkOpenGLCheckErrorMacro("failed at glTexBuffer");
+
+  this->UnBind();
+
+  return true;
+}
+
+#else
+
+// Description:
+// Create a texture buffer basically a 1D texture that can be
+// very large for passing data into the fragment shader
+bool vtkTextureObject::CreateTextureBuffer(unsigned int numValues, int numComps,
+                         int dataType, vtkgl::BufferObject *bo)
+{
+  assert(this->Context);
+  vtkErrorMacro("TextureBuffers not supported in OPenGL ES");
+  // TODO: implement 1D and Texture buffers using 2D textures
+  return false;
 }
 
 #endif // not ES 2.0 or 3.0
@@ -2059,6 +2154,8 @@ bool vtkTextureObject::Create3D(unsigned int width, unsigned int height,
 void vtkTextureObject::CopyToFrameBuffer(
   vtkShaderProgram *program, vtkgl::VertexArrayObject *vao)
 {
+  // the following math really only works when texture
+  // and viewport are of the same dimensions
   float minXTexCoord=static_cast<float>(
     static_cast<double>(0.5)/this->Width);
   float minYTexCoord=static_cast<float>(
@@ -2131,10 +2228,9 @@ void vtkTextureObject::CopyToFrameBuffer(
   float maxYTexCoord=static_cast<float>(
     static_cast<double>(srcYmax+0.5)/this->Height);
 
-#if GL_ES_VERSION_2_0 != 1
-  glPushAttrib(GL_VIEWPORT_BIT);
+  GLint saved_viewport[4];
+  glGetIntegerv(GL_VIEWPORT, saved_viewport);
   glViewport(0,0,dstSizeX,dstSizeY);
-#endif
 
   float tcoords[] = {
     minXTexCoord, minYTexCoord,
@@ -2150,9 +2246,8 @@ void vtkTextureObject::CopyToFrameBuffer(
 
     this->CopyToFrameBuffer(tcoords, verts, program, vao);
 
-#if GL_ES_VERSION_2_0 != 1
-    glPopAttrib();
-#endif
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2],
+      saved_viewport[3]);
   }
 
 void vtkTextureObject::CopyToFrameBuffer(float *tcoords, float *verts,

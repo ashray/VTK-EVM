@@ -229,8 +229,8 @@ public:
   virtual vtkHyperTreeCursor* Clone()
   {
     vtkCompactHyperTreeCursor<N>* result = this->NewInstance();
-    result->Tree = this->Tree;
     assert( "post: results_exists" && result != 0 );
+    result->Tree = this->Tree;
     assert( "post: same_tree" && result->SameTree( this ) );
     return result;
   }
@@ -807,7 +807,7 @@ public:
 
   //---------------------------------------------------------------------------
   // Description:
-  // Return memory used in kilobytes.
+  // Return memory used in kibibytes (1024 bytes).
   // Ignore the attribute array because its size is added by the data set.
   unsigned int GetActualMemorySize()
   {
@@ -925,6 +925,7 @@ vtkHyperTree* vtkHyperTree::CreateInstance( unsigned int factor,
         default:
           vtkGenericWarningMacro( "Bad dimension " << dimension );
         }
+      break;
     case 3:
       switch ( dimension )
         {
@@ -937,6 +938,7 @@ vtkHyperTree* vtkHyperTree::CreateInstance( unsigned int factor,
         default:
           vtkGenericWarningMacro( "Bad dimension " << dimension );
         }
+      break;
     default:
       vtkGenericWarningMacro( "Bad branching factor " << factor );
     }

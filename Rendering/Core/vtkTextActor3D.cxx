@@ -116,7 +116,8 @@ int vtkTextActor3D::GetBoundingBox(int bbox[4])
     return 0;
     }
 
-  if (!tRend->GetBoundingBox(this->TextProperty, this->Input, bbox))
+  if (!tRend->GetBoundingBox(this->TextProperty, this->Input, bbox,
+                             vtkTextActor3D::GetRenderedDPI()))
     {
     vtkErrorMacro(<<"No text in input.");
     return 0;
@@ -137,19 +138,9 @@ int vtkTextActor3D::RenderOverlay(vtkViewport *viewport)
 {
   int rendered_something = 0;
 
-  // Is the viewport's RenderWindow capturing GL2PS-special props?
-  if (vtkRenderer *renderer = vtkRenderer::SafeDownCast(viewport))
-    {
-    if (vtkRenderWindow *renderWindow = renderer->GetRenderWindow())
-      {
-      if (renderWindow->GetCapturingGL2PSSpecialProps())
-        {
-        renderer->CaptureGL2PSSpecialProp(this);
-        }
-      }
-    }
-
-  if (this->UpdateImageActor())
+  if (this->UpdateImageActor() &&
+      this->ImageData &&
+      this->ImageData->GetNumberOfPoints() > 0)
     {
     rendered_something += this->ImageActor->RenderOverlay(viewport);
     }
@@ -162,7 +153,9 @@ int vtkTextActor3D::RenderTranslucentPolygonalGeometry(vtkViewport *viewport)
 {
   int rendered_something = 0;
 
-  if (this->UpdateImageActor())
+  if (this->UpdateImageActor() &&
+      this->ImageData &&
+      this->ImageData->GetNumberOfPoints() > 0)
     {
     rendered_something +=
       this->ImageActor->RenderTranslucentPolygonalGeometry(viewport);
@@ -176,14 +169,7 @@ int vtkTextActor3D::RenderTranslucentPolygonalGeometry(vtkViewport *viewport)
 // Does this prop have some translucent polygonal geometry?
 int vtkTextActor3D::HasTranslucentPolygonalGeometry()
 {
-  int result = 0;
-
-  if (this->UpdateImageActor())
-    {
-    result=this->ImageActor->HasTranslucentPolygonalGeometry();
-    }
-
-  return result;
+  return 1;
 }
 
 // --------------------------------------------------------------------------
@@ -191,7 +177,20 @@ int vtkTextActor3D::RenderOpaqueGeometry(vtkViewport *viewport)
 {
   int rendered_something = 0;
 
-  if (this->UpdateImageActor())
+  if (vtkRenderer *renderer = vtkRenderer::SafeDownCast(viewport))
+    {
+    if (vtkRenderWindow *renderWindow = renderer->GetRenderWindow())
+      {
+      // Is the viewport's RenderWindow capturing GL2PS-special props?
+      if (renderWindow->GetCapturingGL2PSSpecialProps())
+        {
+        renderer->CaptureGL2PSSpecialProp(this);
+        }
+      }
+    }
+
+  if (this->UpdateImageActor() &&
+      this->ImageData && this->ImageData->GetNumberOfPoints() > 0)
     {
     rendered_something += this->ImageActor->RenderOpaqueGeometry(viewport);
     }
@@ -206,6 +205,7 @@ int vtkTextActor3D::UpdateImageActor()
   if (!this->TextProperty)
     {
     vtkErrorMacro(<<"Need a text property to render text actor");
+    this->ImageActor->SetInputData(0);
     return 0;
     }
 
@@ -215,6 +215,10 @@ int vtkTextActor3D::UpdateImageActor()
     this->ImageActor->SetInputData(0);
     return 1;
     }
+
+  // copy information to the delegate
+  vtkInformation *info = this->GetPropertyKeys();
+  this->ImageActor->SetPropertyKeys(info);
 
   // Do we need to (re-)render the text ?
   // Yes if:
@@ -239,12 +243,15 @@ int vtkTextActor3D::UpdateImageActor()
     if (!tRend)
       {
       vtkErrorMacro(<<"Failed getting the TextRenderer instance.");
+      this->ImageActor->SetInputData(0);
       return 0;
       }
 
-    if (!tRend->RenderString(this->TextProperty, this->Input, this->ImageData))
+    if (!tRend->RenderString(this->TextProperty, this->Input, this->ImageData,
+                             NULL, vtkTextActor3D::GetRenderedDPI()))
       {
       vtkErrorMacro(<<"Failed rendering text to buffer");
+      this->ImageActor->SetInputData(0);
       return 0;
       }
 

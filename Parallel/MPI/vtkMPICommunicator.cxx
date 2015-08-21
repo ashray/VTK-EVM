@@ -381,7 +381,7 @@ vtkMPICommunicator* vtkMPICommunicator::GetWorldCommunicator()
     {
     // Install an error handler
     MPI_Errhandler errhandler;
-#if (MPI_VERSION > 2) || ((MPI_VERSION == 2) && (MPI_SUBVERSION >= 2))
+#if (MPI_VERSION > 2) || ((MPI_VERSION == 2) && (MPI_SUBVERSION >= 0))
     MPI_Comm_create_errhandler(vtkMPICommunicatorMPIErrorHandler, &errhandler);
     MPI_Comm_set_errhandler(MPI_COMM_WORLD, errhandler);
 #else
@@ -639,10 +639,7 @@ int vtkMPICommunicator::InitializeExternal (vtkMPICommunicatorOpaqueComm* comm)
 {
   this->KeepHandleOn();
 
-  if (this->MPIComm->Handle)
-    {
-    delete this->MPIComm->Handle;
-    }
+  delete this->MPIComm->Handle;
   this->MPIComm->Handle = new MPI_Comm (*(comm->GetHandle()));
   this->InitializeNumberOfProcesses();
   this->Initialized = 1;

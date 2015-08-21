@@ -267,11 +267,7 @@ public:
         vtkOpenGLStaticCheckErrorMacro("failed at glDeleteTextures");
         this->TextureId=0;
         }
-      if(this->Table!=0)
-        {
-        delete[] this->Table;
-        this->Table=0;
-        }
+      delete[] this->Table;
     }
 
   bool IsLoaded()
@@ -468,11 +464,7 @@ public:
         vtkOpenGLStaticCheckErrorMacro("failed at glDeleteTextures");
         this->TextureId=0;
         }
-      if(this->Table!=0)
-        {
-        delete[] this->Table;
-        this->Table=0;
-        }
+      delete[] this->Table;
     }
 
   bool IsLoaded()
@@ -941,34 +933,9 @@ public:
                      *(dim[0]-cellFlag)+textureExtent[0])
                     *scalars->GetNumberOfComponents());
 
-                  if(1) // !this->SupportsPixelBufferObjects)
-                    {
-                    vtkgl::TexImage3D(vtkgl::TEXTURE_3D, 0, internalFormat,
-                                      textureSize[0],textureSize[1],textureSize[2],
-                                      0,format,type,dataPtr);
-                    }
-                  else
-                    {
-                    GLuint pbo=0;
-                    vtkgl::GenBuffers(1,&pbo);
-                    vtkOpenGLStaticCheckErrorMacro("genbuffer");
-                    vtkgl::BindBuffer(vtkgl::PIXEL_UNPACK_BUFFER,pbo);
-                    vtkOpenGLStaticCheckErrorMacro("binbuffer");
-                    vtkgl::GLsizeiptr texSize=
-                      textureSize[0]*textureSize[1]*textureSize[2]*
-                      vtkAbstractArray::GetDataTypeSize(scalarType)*
-                      scalars->GetNumberOfComponents();
-                    vtkgl::BufferData(vtkgl::PIXEL_UNPACK_BUFFER,texSize,dataPtr,
-                                      vtkgl::STREAM_DRAW);
-                    vtkOpenGLStaticCheckErrorMacro("bufferdata");
-                    vtkgl::TexImage3D(vtkgl::TEXTURE_3D, 0, internalFormat,
-                                      textureSize[0],textureSize[1],textureSize[2],
-                                      0,format,type,0);
-                    vtkOpenGLStaticCheckErrorMacro("teximage3d");
-                    vtkgl::BindBuffer(vtkgl::PIXEL_UNPACK_BUFFER,0);
-                    vtkOpenGLStaticCheckErrorMacro("bindbuffer to 0");
-                    vtkgl::DeleteBuffers(1,&pbo);
-                    }
+                  vtkgl::TexImage3D(vtkgl::TEXTURE_3D, 0, internalFormat,
+                                    textureSize[0],textureSize[1],textureSize[2],
+                                    0,format,type,dataPtr);
                   vtkOpenGLStaticCheckErrorMacro("3d texture is too large2");
                   // make sure TexImage3D is executed with our PixelTransfer mode
                   glFinish();
@@ -2001,11 +1968,8 @@ vtkOpenGLGPUVolumeRayCastMapper::vtkOpenGLGPUVolumeRayCastMapper()
 //-----------------------------------------------------------------------------
 vtkOpenGLGPUVolumeRayCastMapper::~vtkOpenGLGPUVolumeRayCastMapper()
 {
-  if(this->UnsupportedRequiredExtensions!=0)
-    {
-    delete this->UnsupportedRequiredExtensions;
-    this->UnsupportedRequiredExtensions=0;
-    }
+  delete this->UnsupportedRequiredExtensions;
+
   int i=0;
   while(i<3)
     {
@@ -2014,11 +1978,7 @@ vtkOpenGLGPUVolumeRayCastMapper::~vtkOpenGLGPUVolumeRayCastMapper()
     ++i;
     }
 
-  if(this->ErrorString!=0)
-    {
-    delete[] this->ErrorString;
-    this->ErrorString=0;
-    }
+  delete[] this->ErrorString;
 
   if ( this->SmallInput )
     {
@@ -2059,24 +2019,9 @@ vtkOpenGLGPUVolumeRayCastMapper::~vtkOpenGLGPUVolumeRayCastMapper()
   this->InvVolumeMatrix->UnRegister(this);
   this->InvVolumeMatrix=0;
 
-  if(this->NoiseTexture!=0)
-    {
-    delete[] this->NoiseTexture;
-    this->NoiseTexture=0;
-    this->NoiseTextureSize=0;
-    }
-
-  if(this->ScalarsTextures!=0)
-    {
-    delete this->ScalarsTextures;
-    this->ScalarsTextures=0;
-    }
-
-  if(this->MaskTextures!=0)
-    {
-    delete this->MaskTextures;
-    this->MaskTextures=0;
-    }
+  delete[] this->NoiseTexture;
+  delete this->ScalarsTextures;
+  delete this->MaskTextures;
 
   if(this->Program!=0)
     {
@@ -2187,10 +2132,7 @@ void vtkOpenGLGPUVolumeRayCastMapper::LoadExtensions(
 {
   // We may already have a string stream for the unsupported extensions
   // from the last time this method was called. If so, delete it.
-  if(this->UnsupportedRequiredExtensions!=0)
-    {
-    delete this->UnsupportedRequiredExtensions;
-    }
+  delete this->UnsupportedRequiredExtensions;
 
   // Create a string stream to hold the unsupported extensions so we can
   // report something meaningful back
@@ -2200,14 +2142,15 @@ void vtkOpenGLGPUVolumeRayCastMapper::LoadExtensions(
   // It does not work on Apple OS X Snow Leopard with nVidia.
   // There is a bug in the OpenGL driver with an error in the
   // Cg compiler about an infinite loop.
-#ifndef APPLE_SNOW_LEOPARD_BUG
- #ifdef __APPLE__
+#if defined(__APPLE__) && !defined(APPLE_SNOW_LEOPARD_BUG)
+
+  (void)window;
   this->UnsupportedRequiredExtensions->Stream<<
     " Disabled on Apple OS X Snow Leopard with nVidia.";
   this->LoadExtensionsSucceeded=0;
   return;
- #endif
-#endif
+
+#else
 
   // Assume success
   this->LoadExtensionsSucceeded=1;
@@ -2488,6 +2431,8 @@ void vtkOpenGLGPUVolumeRayCastMapper::LoadExtensions(
   this->LastComponent=
     vtkOpenGLGPUVolumeRayCastMapperComponentNotInitialized;
   this->LastShade=vtkOpenGLGPUVolumeRayCastMapperShadeNotInitialized;
+
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -2584,29 +2529,17 @@ void vtkOpenGLGPUVolumeRayCastMapper::ReleaseGraphicsResources(
       }
     }
 
-  if(this->RGBTable!=0)
-    {
-    delete this->RGBTable;
-    this->RGBTable=0;
-    }
+  delete this->RGBTable;
+  this->RGBTable=0;
 
-  if(this->Mask1RGBTable!=0)
-    {
-    delete this->Mask1RGBTable;
-    this->Mask1RGBTable=0;
-    }
+  delete this->Mask1RGBTable;
+  this->Mask1RGBTable=0;
 
-  if(this->Mask2RGBTable!=0)
-    {
-    delete this->Mask2RGBTable;
-    this->Mask2RGBTable=0;
-    }
+  delete this->Mask2RGBTable;
+  this->Mask2RGBTable=0;
 
-  if(this->OpacityTables!=0)
-    {
-    delete this->OpacityTables;
-    this->OpacityTables=0;
-    }
+  delete this->OpacityTables;
+  this->OpacityTables=0;
 
   if(this->Program!=0)
     {

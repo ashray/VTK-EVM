@@ -22,13 +22,6 @@
 //
 // .SECTION See Also
 // vtkActor2D vtkTextActor vtkTextActor3D vtkTextProperty vtkTextRenderer
-//
-// .SECTION Note
-// This class will be overridden by the older vtkOpenGLFreeTypeTextMapper when
-// the vtkRenderingFreeTypeOpenGL library is linked into the executable. That
-// class provides legacy support for regression testing, but lacks many of the
-// newer features provided by this implementation (such as unicode and MathText
-// strings). Do not link with that library if such features are needed.
 
 #ifndef vtkTextMapper_h
 #define vtkTextMapper_h
@@ -142,11 +135,12 @@ private:
   vtkTextMapper(const vtkTextMapper&);  // Not implemented.
   void operator=(const vtkTextMapper&);  // Not implemented.
 
-  void UpdateQuad(vtkActor2D *actor);
-  void UpdateImage();
+  void UpdateQuad(vtkActor2D *actor, int dpi);
+  void UpdateImage(int dpi);
 
   int TextDims[2];
 
+  int RenderedDPI;
   vtkTimeStamp CoordsTime;
   vtkTimeStamp TCoordsTime;
   vtkNew<vtkImageData> Image;

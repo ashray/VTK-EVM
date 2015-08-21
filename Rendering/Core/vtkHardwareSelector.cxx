@@ -138,7 +138,7 @@ public:
       vtkIdType cc=0;
       for (idIter = id_values.begin(); idIter != id_values.end(); ++idIter, ++cc)
         {
-        ptr[cc] = key.Prop->GetConvertedPickValue(*idIter, fieldassociation);
+        ptr[cc] = *idIter;
         }
       child->SetSelectionList(ids);
       ids->FastDelete();
@@ -331,12 +331,7 @@ bool vtkHardwareSelector::PassRequired(int pass)
 //----------------------------------------------------------------------------
 void vtkHardwareSelector::SavePixelBuffer(int passNo)
 {
-  if (this->PixBuffer[passNo])
-    {
-    delete [] this->PixBuffer[passNo];
-    this->PixBuffer[passNo] = 0;
-    }
-
+  delete [] this->PixBuffer[passNo];
   this->PixBuffer[passNo] = this->Renderer->GetRenderWindow()->GetPixelData(
     this->Area[0], this->Area[1], this->Area[2], this->Area[3],
     (this->Renderer->GetRenderWindow()->GetSwapBuffers() == 1)? 1 : 0);
@@ -465,7 +460,8 @@ void vtkHardwareSelector::RenderAttributeId(vtkIdType attribid)
 {
   if (attribid < 0)
     {
-    vtkErrorMacro("Invalid id: " << attribid);
+    // negative attribid is valid. It happens when rendering higher order
+    // elements where new points are added for rendering smooth surfaces.
     return;
     }
 

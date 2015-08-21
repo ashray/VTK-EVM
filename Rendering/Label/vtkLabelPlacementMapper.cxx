@@ -493,10 +493,7 @@ vtkLabelPlacementMapper::vtkLabelPlacementMapper()
 vtkLabelPlacementMapper::~vtkLabelPlacementMapper()
 {
   this->AnchorTransform->Delete();
-  if ( this->Buckets )
-    {
-    delete this->Buckets;
-    }
+  delete this->Buckets;
   this->VisiblePoints->Delete();
   if ( this->RenderStrategy )
     {
@@ -885,15 +882,18 @@ void vtkLabelPlacementMapper::RenderOverlay(vtkViewport *viewport,
   vtkDebugMacro("Placed: " << placed);
   vtkDebugMacro("Labels Occluded: " << occluded);
 
-  if (zPtr)
-    {
-    delete [] zPtr;
-    }
+  delete [] zPtr;
 
   timer->StopTimer();
   vtkDebugMacro("Iteration time: " << timer->GetElapsedTime());
   log->StopTimer();
   //cerr << log->GetElapsedTime() << endl;
+}
+
+//----------------------------------------------------------------------------
+void vtkLabelPlacementMapper::ReleaseGraphicsResources(vtkWindow *win)
+{
+  this->RenderStrategy->ReleaseGraphicsResources(win);
 }
 
 //----------------------------------------------------------------------------

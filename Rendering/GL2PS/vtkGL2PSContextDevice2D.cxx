@@ -249,11 +249,10 @@ void vtkGL2PSContextDevice2D::DrawMathTextString(float apoint[],
 {
   vtkNew<vtkPath> path;
   bool ok;
-  if (vtkMathTextUtilities::GetInstance())
+  if (vtkMathTextUtilities *mtu = vtkMathTextUtilities::GetInstance())
     {
-    ok = vtkMathTextUtilities::GetInstance()->StringToPath(string.c_str(),
-                                                           path.GetPointer(),
-                                                           this->TextProp);
+    ok = mtu->StringToPath(string.c_str(), path.GetPointer(), this->TextProp,
+                           this->RenderWindow->GetDPI());
     }
   else
     {
@@ -351,7 +350,7 @@ void vtkGL2PSContextDevice2D::DrawCrossMarkers(bool highlight, float *points,
   for (int i = 0; i < n; ++i)
     {
     float *point = points + (i * 2);
-    if  (colors)
+    if (colors)
       {
       color[3] = 255;
       switch (nc_comps)
@@ -362,6 +361,7 @@ void vtkGL2PSContextDevice2D::DrawCrossMarkers(bool highlight, float *points,
           break;
         case 2:
           color[3] = colors[i * nc_comps + 1];
+          VTK_FALLTHROUGH;
         case 1:
           memset(color, colors[i * nc_comps], 3);
           break;
@@ -435,6 +435,7 @@ void vtkGL2PSContextDevice2D::DrawPlusMarkers(bool highlight, float *points,
           break;
         case 2:
           color[3] = colors[i * nc_comps + 1];
+          VTK_FALLTHROUGH;
         case 1:
           memset(color, colors[i * nc_comps], 3);
           break;
@@ -499,6 +500,7 @@ void vtkGL2PSContextDevice2D::DrawSquareMarkers(bool /*highlight*/,
           break;
         case 2:
           color[3] = colors[i * nc_comps + 1];
+          VTK_FALLTHROUGH;
         case 1:
           memset(color, colors[i * nc_comps], 3);
           break;
@@ -553,6 +555,7 @@ void vtkGL2PSContextDevice2D::DrawCircleMarkers(bool /*highlight*/,
           break;
         case 2:
           color[3] = colors[i * nc_comps + 1];
+          VTK_FALLTHROUGH;
         case 1:
           memset(color, colors[i * nc_comps], 3);
           break;
@@ -604,6 +607,7 @@ void vtkGL2PSContextDevice2D::DrawDiamondMarkers(bool /*highlight*/,
           break;
         case 2:
           color[3] = colors[i * nc_comps + 1];
+          VTK_FALLTHROUGH;
         case 1:
           memset(color, colors[i * nc_comps], 3);
           break;

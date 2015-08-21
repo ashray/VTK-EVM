@@ -24,6 +24,7 @@
 #include "vtkXMLDataElement.h"
 #include "vtkXMLDataParser.h"
 #include "vtkXMLFileReadTester.h"
+#include "vtkXMLReaderVersion.h"
 #include "vtkZLibDataCompressor.h"
 #include "vtkInformation.h"
 #include "vtkInformationVector.h"
@@ -188,7 +189,7 @@ vtkDataSet* vtkXMLReader::GetOutputAsDataSet(int index)
 // functionality that can be safely ignored by older readers.
 int vtkXMLReader::CanReadFileVersion(int major, int vtkNotUsed(minor))
 {
-  return (major > 1) ? 0 : 1;
+  return (major > vtkXMLReaderMajorVersion) ? 0 : 1;
 }
 
 //----------------------------------------------------------------------------
@@ -243,11 +244,8 @@ int vtkXMLReader::OpenVTKFile()
   if (!this->FileStream || !(*this->FileStream))
     {
     vtkErrorMacro("Error opening file " << this->FileName);
-    if (this->FileStream)
-      {
-      delete this->FileStream;
-      this->FileStream = 0;
-      }
+    delete this->FileStream;
+    this->FileStream = 0;
     return 0;
     }
 
@@ -283,11 +281,8 @@ int vtkXMLReader::OpenVTKString()
   if(!this->StringStream || !(*this->StringStream))
     {
     vtkErrorMacro("Error opening string stream");
-    if(this->StringStream)
-      {
-      delete this->StringStream;
-      this->StringStream = 0;
-      }
+    delete this->StringStream;
+    this->StringStream = 0;
     return 0;
     }
 

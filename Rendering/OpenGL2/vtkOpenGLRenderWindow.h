@@ -49,6 +49,11 @@ public:
   void PrintSelf(ostream& os, vtkIndent indent);
 
   // Description:
+  // Overridden to release resources that would interfere with an external
+  // application's rendering.
+  void Render();
+
+  // Description:
   // Set/Get the maximum number of multisamples
   static void SetGlobalMaximumNumberOfMultiSamples(int val);
   static int  GetGlobalMaximumNumberOfMultiSamples();
@@ -216,6 +221,11 @@ public:
   static void RenderQuad(
     float *verts, float *tcoords,
     vtkShaderProgram *program, vtkgl::VertexArrayObject *vao);
+  static void RenderTriangles(
+    float *verts, unsigned int numVerts,
+    GLuint *indices, unsigned int numIndices,
+    float *tcoords,
+    vtkShaderProgram *program, vtkgl::VertexArrayObject *vao);
 
   // Description:
   // Replacement for the old glDrawPixels function
@@ -293,6 +303,17 @@ protected:
   // Description:
   // Set the texture unit manager.
   void SetTextureUnitManager(vtkTextureUnitManager *textureUnitManager);
+
+
+  // Description:
+  // Query and save OpenGL state
+  void SaveGLState();
+
+  // Description:
+  // Restore OpenGL state at end of the rendering
+  void RestoreGLState();
+
+  std::map<std::string, int> GLStateIntegers;
 
   unsigned int BackLeftBuffer;
   unsigned int BackRightBuffer;

@@ -84,6 +84,11 @@ void vtkFrameBufferObject::DestroyFBO()
 //----------------------------------------------------------------------------
 bool vtkFrameBufferObject::IsSupported(vtkOpenGLRenderWindow *)
 {
+  if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+    {
+    return true;
+    }
+
 #if GL_ES_VERSION_3_0 == 1
   bool fbo = true;
   bool fboBlit = true;
@@ -96,8 +101,13 @@ bool vtkFrameBufferObject::IsSupported(vtkOpenGLRenderWindow *)
 }
 
 //----------------------------------------------------------------------------
-bool vtkFrameBufferObject::LoadRequiredExtensions(vtkOpenGLRenderWindow *vtkNotUsed(win))
+bool vtkFrameBufferObject::LoadRequiredExtensions(vtkOpenGLRenderWindow *)
 {
+   if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+    {
+    return true;
+    }
+
 #if GL_ES_VERSION_3_0 == 1
   bool fbo = true;
   bool fboBlit = true;
@@ -912,10 +922,6 @@ void vtkFrameBufferObject::PrintSelf(ostream& os, vtkIndent indent)
   os << indent << "NumberOfRenderTargets:" << this->NumberOfRenderTargets
      << endl;
 }
-
-// Description:
-// Common switch for parsing fbo status return.
-#define vtkFBOStrErrorMacro(status, str, ok) \
 
 // ----------------------------------------------------------------------------
 int vtkFrameBufferObject::CheckFrameBufferStatus(unsigned int mode)

@@ -25,6 +25,9 @@ uniform sampler2D gx1;
 uniform sampler2D gy1;
 uniform float stepSize; // 1/H
 
+// the output of this shader
+//VTK::Output::Dec
+
 void main(void)
 {
   vec2 offset=vec2(0.0,stepSize);
@@ -51,7 +54,7 @@ void main(void)
 
   // the maximum gradient magnitude is sqrt(2.0) when for example gx=1 and
   // gy=1
-//  gl_FragColor=sqrt((gx*gx+gy*gy)/2.0);
-  gl_FragColor.rgb=sqrt((gx.rgb*gx.rgb+gy.rgb*gy.rgb)/2.0);
-  gl_FragColor.a=1.0; // arbitrary choice.
+//  gl_FragData[0]=sqrt((gx*gx+gy*gy)/2.0);
+  gl_FragData[0].rgb=sqrt((gx.rgb*gx.rgb+gy.rgb*gy.rgb)/2.0);
+  gl_FragData[0].a=1.0; // arbitrary choice.
 }

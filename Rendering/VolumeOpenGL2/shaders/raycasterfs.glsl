@@ -12,8 +12,6 @@
      PURPOSE.  See the above copyright notice for more information.
 
 =========================================================================*/
-#version 120
-
 // The following line handle system declarations such a
 // default precisions, or defining precisions to null
 //VTK::System::Dec
@@ -46,19 +44,32 @@ vec3 g_dirStep;
 vec4 g_srcColor;
 vec4 g_eyePosObj;
 
+uniform vec4 in_volume_scale;
+uniform vec4 in_volume_bias;
+
+//VTK::Output::Dec
+
 //VTK::Base::Dec
+
 //VTK::Termination::Dec
+
 //VTK::Cropping::Dec
+
 //VTK::Shading::Dec
+
 //VTK::BinaryMask::Dec
+
 //VTK::CompositeMask::Dec
 
 //VTK::ComputeOpacity::Dec
-//VTK::ComputeGradient::Dec
-//VTK::ComputeLighting::Dec
-//VTK::ColorTransferFunc::Dec
 
-//VTK::RayDirectionFunc::Dec
+//VTK::ComputeGradient::Dec
+
+//VTK::ComputeLighting::Dec
+
+//VTK::ComputeColor::Dec
+
+//VTK::ComputeRayDirection::Dec
 
 /// We support only 8 clipping planes for now
 /// The first value is the size of the data array for clipping
@@ -79,20 +90,30 @@ void main()
   g_dirStep = vec3(0.0);
 
   //VTK::Base::Init
+
   //VTK::Terminate::Init
+
   //VTK::Shading::Init
+
   //VTK::Cropping::Init
+
   //VTK::Clipping::Init
 
   /// For all samples along the ray
   while (true)
     {
     //VTK::Base::Impl
+
     //VTK::Terminate::Impl
+
     //VTK::Cropping::Impl
+
     //VTK::Clipping::Impl
+
     //VTK::BinaryMask::Impl
+
     //VTK::CompositeMask::Impl
+
     //VTK::Shading::Impl
 
     /// Advance ray
@@ -100,13 +121,17 @@ void main()
     }
 
   //VTK::Base::Exit
+
   //VTK::Terminate::Exit
+
   //VTK::Cropping::Exit
+
   //VTK::Clipping::Exit
+
   //VTK::Shading::Exit
 
   g_fragColor.r = g_fragColor.r * in_scale + in_bias * g_fragColor.a;
   g_fragColor.g = g_fragColor.g * in_scale + in_bias * g_fragColor.a;
   g_fragColor.b = g_fragColor.b * in_scale + in_bias * g_fragColor.a;
-  gl_FragColor = g_fragColor;
+  gl_FragData[0] = g_fragColor;
   }

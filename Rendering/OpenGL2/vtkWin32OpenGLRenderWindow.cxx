@@ -21,7 +21,7 @@ PURPOSE.  See the above copyright notice for more information.
 #include "vtkOpenGLRenderWindow.h"
 #include "vtkOpenGLError.h"
 #include "vtkRendererCollection.h"
-#include "vtkWin32OpenGLRenderWindowInteractor.h"
+#include "vtkWin32RenderWindowInteractor.h"
 
 #include <math.h>
 #include <vtksys/ios/sstream>
@@ -435,13 +435,19 @@ const char* vtkWin32OpenGLRenderWindow::ReportCapabilities()
   const char *glVendor = (const char *) glGetString(GL_VENDOR);
   const char *glRenderer = (const char *) glGetString(GL_RENDERER);
   const char *glVersion = (const char *) glGetString(GL_VERSION);
-  const char *glExtensions = (const char *) glGetString(GL_EXTENSIONS);
 
   vtksys_ios::ostringstream strm;
   strm << "OpenGL vendor string:  " << glVendor << endl;
   strm << "OpenGL renderer string:  " << glRenderer << endl;
   strm << "OpenGL version string:  " << glVersion << endl;
-  strm << "OpenGL extensions:  " << glExtensions << endl;
+  strm << "OpenGL extensions:  " << endl;
+  GLint n, i;
+  glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+  for (i = 0; i < n; i++)
+    {
+    const char *ext = (const char *)glGetStringi(GL_EXTENSIONS, i);
+    strm << "  " << ext << endl;
+    }
   strm << "PixelFormat Descriptor:" << endl;
   strm << "depth:  " << static_cast<int>(pfd.cDepthBits) << endl;
   if (pfd.cColorBits <= 8)
@@ -496,51 +502,23 @@ typedef bool (APIENTRY *wglChoosePixelFormatARBType)(HDC, const int*, const floa
 
 bool WGLisExtensionSupported(const char *extension)
 {
-  const size_t extlen = strlen(extension);
   const char *supported = NULL;
-
-  // Try To Use wglGetExtensionStringARB On Current DC, If Possible
-  PROC wglGetExtString = wglGetProcAddress("wglGetExtensionsStringARB");
-
-  if (wglGetExtString)
-    {
-    supported = ((char*(__stdcall*)(HDC))wglGetExtString)(wglGetCurrentDC());
-    }
 
   // If That Failed, Try Standard Opengl Extensions String
   if (supported == NULL)
     {
-    supported = (char*)glGetString(GL_EXTENSIONS);
-    }
-
-  // If That Failed Too, Must Be No Extensions Supported
-  if (supported == NULL)
-    {
-    return false;
-    }
-
-  // Begin Examination At Start Of String, Increment By 1 On False Match
-  for (const char* p = supported; ; p++)
-    {
-    // Advance p Up To The Next Possible Match
-    p = strstr(p, extension);
-
-    if (p == NULL)
+    GLint n, i;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+    for (i = 0; i < n; i++)
       {
-      return false; // No Match
-      }
-
-    // Make Sure That Match Is At The Start Of The String Or That
-    // The Previous Char Is A Space, Or Else We Could Accidentally
-    // Match "wglFunkywglExtension" With "wglExtension"
-
-    // Also, Make Sure That The Following Character Is Space Or NULL
-    // Or Else "wglExtensionTwo" Might Match "wglExtension"
-    if ((p==supported || p[-1]==' ') && (p[extlen]=='\0' || p[extlen]==' '))
-      {
-      return true; // Match
+      const char *ext = (const char *)glGetStringi(GL_EXTENSIONS, i);
+      if (!strcmp(ext,extension))
+        {
+        return true;
+        }
       }
     }
+  return false;
 }
 
 void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
@@ -571,6 +549,7 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
 
   // First we try to use the newer wglChoosePixelFormatARB which enables
   // features like multisamples.
+  PIXELFORMATDESCRIPTOR pfd;
   int pixelFormat = 0;
   wglChoosePixelFormatARBType wglChoosePixelFormatARB =
     reinterpret_cast<wglChoosePixelFormatARBType>(wglGetProcAddress("wglChoosePixelFormatARB"));
@@ -629,11 +608,19 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
           }
         }
       }
-    PIXELFORMATDESCRIPTOR pfd;
+
     DescribePixelFormat(hDC, pixelFormat, sizeof(pfd), &pfd);
     if (!SetPixelFormat(hDC, pixelFormat, &pfd))
       {
       pixelFormat = 0;
+      }
+    else
+      {
+      if (debug && (dwFlags & PFD_STEREO) && !(pfd.dwFlags & PFD_STEREO))
+        {
+        vtkGenericWarningMacro("No Stereo Available!");
+        this->StereoCapableWindow = 0;
+        }
       }
     }
 
@@ -644,31 +631,34 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
     this->SetupPalette(hDC);
 
     // create a context
-    // PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB =
-    //   reinterpret_cast<PFNWGLCREATECONTEXTATTRIBSARBPROC>(wglGetProcAddress("wglCreateContextAttribsARB"));
-    // if (wglCreateContextAttribsARB)
-    //   {
-    //   int iContextAttribs[] =
-    //     {
-    //     WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
-    //     WGL_CONTEXT_MINOR_VERSION_ARB, 2,
-    //     WGL_CONTEXT_FLAGS_ARB, 0,
-    //     WGL_CONTEXT_PROFILE_MASK_ARB,
-    //       WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-    //     // WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
-    //     0 // End of attributes list
-    //     };
+#define USE_32_CONTEXT
+#ifdef USE_32_CONTEXT
+    PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB =
+      reinterpret_cast<PFNWGLCREATECONTEXTATTRIBSARBPROC>(wglGetProcAddress("wglCreateContextAttribsARB"));
+    if (wglCreateContextAttribsARB)
+      {
+      int iContextAttribs[] =
+        {
+        WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+        WGL_CONTEXT_MINOR_VERSION_ARB, 2,
+        WGL_CONTEXT_FLAGS_ARB, 0,
+  //      WGL_CONTEXT_PROFILE_MASK_ARB,
+  //    WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+        // WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+        0 // End of attributes list
+        };
 
-    //   this->ContextId = wglCreateContextAttribsARB(hDC, 0, iContextAttribs);
-    //   }
-    // if (this->ContextId)
-    //   {
-    //   this->SetContextSupportsOpenGL32(true);
-    //   }
-    // else
-    //   {
+      this->ContextId = wglCreateContextAttribsARB(hDC, 0, iContextAttribs);
+      }
+    if (this->ContextId)
+      {
+      this->SetContextSupportsOpenGL32(true);
+      }
+    else
+#endif
+      {
       this->ContextId = wglCreateContext(hDC);
-//     }
+      }
     if (this->ContextId == NULL)
       {
       vtkErrorMacro("wglCreateContext failed in CreateAWindow(), error: " << GetLastError());
@@ -688,7 +678,7 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
     return;
     }
 
-  PIXELFORMATDESCRIPTOR pfd = {
+  PIXELFORMATDESCRIPTOR pfd2 = {
     sizeof(PIXELFORMATDESCRIPTOR),  /* size */
     1,                              /* version */
     dwFlags         ,               /* support double-buffering */
@@ -712,8 +702,8 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
   // supports OpenGL
   if (currentPixelFormat != 0)
     {
-    DescribePixelFormat(hDC, currentPixelFormat,sizeof(pfd), &pfd);
-    if (!(pfd.dwFlags & PFD_SUPPORT_OPENGL))
+    DescribePixelFormat(hDC, currentPixelFormat,sizeof(pfd2), &pfd2);
+    if (!(pfd2.dwFlags & PFD_SUPPORT_OPENGL))
       {
 #ifdef UNICODE
       MessageBox(WindowFromDC(hDC),
@@ -740,7 +730,7 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
   else
     {
     // hDC has no current PixelFormat, so
-    pixelFormat = ChoosePixelFormat(hDC, &pfd);
+    pixelFormat = ChoosePixelFormat(hDC, &pfd2);
     if (pixelFormat == 0)
       {
 #ifdef UNICODE
@@ -760,8 +750,8 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
         exit(1);
         }
       }
-    DescribePixelFormat(hDC, pixelFormat,sizeof(pfd), &pfd);
-    if (SetPixelFormat(hDC, pixelFormat, &pfd) != TRUE)
+    DescribePixelFormat(hDC, pixelFormat,sizeof(pfd2), &pfd2);
+    if (SetPixelFormat(hDC, pixelFormat, &pfd2) != TRUE)
       {
       // int err = GetLastError();
 #ifdef UNICODE
@@ -782,7 +772,7 @@ void vtkWin32OpenGLRenderWindow::SetupPixelFormatPaletteAndContext(
         }
       }
     }
-  if (debug && (dwFlags & PFD_STEREO) && !(pfd.dwFlags & PFD_STEREO))
+  if (debug && (dwFlags & PFD_STEREO) && !(pfd2.dwFlags & PFD_STEREO))
     {
     vtkGenericWarningMacro("No Stereo Available!");
     this->StereoCapableWindow = 0;
@@ -1120,9 +1110,6 @@ void vtkWin32OpenGLRenderWindow::WindowInitialize()
     this->MakeCurrent(); // hsr
     this->OpenGLInit();
     }
-
-  // set the DPI
-  this->SetDPI(GetDeviceCaps(this->DeviceContext, LOGPIXELSY));
 }
 
 // Initialize the rendering window.
@@ -1775,4 +1762,11 @@ void vtkWin32OpenGLRenderWindow::SetCurrentCursor(int shape)
       LoadImage(0,cursorName,IMAGE_CURSOR,0,0,LR_SHARED | LR_DEFAULTSIZE);
     SetCursor((HCURSOR)cursor);
     }
+}
+
+//----------------------------------------------------------------------------
+bool vtkWin32OpenGLRenderWindow::DetectDPI()
+{
+  this->SetDPI(GetDeviceCaps(this->DeviceContext, LOGPIXELSY));
+  return true;
 }

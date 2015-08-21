@@ -421,6 +421,7 @@ void vtkProp3D::ComputeMatrix()
 
     this->Transform->PreMultiply();
     this->Transform->GetMatrix(this->Matrix);
+    this->Matrix->Modified();
     this->MatrixMTime.Modified();
     this->Transform->Pop();
     }
@@ -565,22 +566,25 @@ void vtkProp3D::PokeMatrix(vtkMatrix4x4 *matrix)
     }
   else //we restore our original state
     {
-    this->CachedProp3D->GetOrigin(this->Origin);
-    this->CachedProp3D->GetPosition(this->Position);
-    this->CachedProp3D->GetScale(this->Scale);
-    if ( this->CachedProp3D->UserTransform &&
-         this->CachedProp3D->UserTransform->GetMatrix() ==
-         this->CachedProp3D->UserMatrix )
-      {
-      this->SetUserTransform(this->CachedProp3D->UserTransform);
-      }
-    else
-      {
-      this->SetUserMatrix(this->CachedProp3D->UserMatrix);
-      }
-    this->CachedProp3D->SetUserTransform(NULL);
-    this->Transform->SetMatrix(this->CachedProp3D->Transform->GetMatrix());
-    this->Modified();
+      if( this->CachedProp3D != NULL )
+        {
+          this->CachedProp3D->GetOrigin(this->Origin);
+          this->CachedProp3D->GetPosition(this->Position);
+          this->CachedProp3D->GetScale(this->Scale);
+          if ( this->CachedProp3D->UserTransform &&
+               this->CachedProp3D->UserTransform->GetMatrix() ==
+               this->CachedProp3D->UserMatrix )
+            {
+            this->SetUserTransform(this->CachedProp3D->UserTransform);
+            }
+          else
+            {
+            this->SetUserMatrix(this->CachedProp3D->UserMatrix);
+            }
+          this->CachedProp3D->SetUserTransform(NULL);
+          this->Transform->SetMatrix(this->CachedProp3D->Transform->GetMatrix());
+          this->Modified();
+        }
     }
 }
 

@@ -130,9 +130,13 @@ vtkOpenGLRenderWindow::~vtkOpenGLRenderWindow()
     }
 
   this->SetTextureUnitManager(0);
+
+  this->GLStateIntegers.clear();
+
   this->ShaderCache->UnRegister(this);
 }
 
+// ----------------------------------------------------------------------------
 void vtkOpenGLRenderWindow::ReleaseGraphicsResources()
 {
   vtkCollectionSimpleIterator rsit;
@@ -164,7 +168,6 @@ void vtkOpenGLRenderWindow::ReleaseGraphicsResources()
       }
     }
 }
-
 
 // ----------------------------------------------------------------------------
 unsigned long vtkOpenGLRenderWindow::GetContextCreationTime()
@@ -342,29 +345,9 @@ void vtkOpenGLRenderWindow::OpenGLInitState()
   glEnable( GL_DEPTH_TEST );
 
   // initialize blending for transparency
-  if(glBlendFuncSeparate != 0)
-    {
-    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-                             GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
-    }
-  else
-    {
-    glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-    }
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                      GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_BLEND);
-
-  if (this->PointSmoothing)
-    {
-#ifdef GL_POINT_SMOOTH
-    glEnable(GL_POINT_SMOOTH);
-#endif
-    }
-  else
-    {
-#ifdef GL_POINT_SMOOTH
-    glDisable(GL_POINT_SMOOTH);
-#endif
-    }
 
   if (this->LineSmoothing)
     {
@@ -425,11 +408,23 @@ void vtkOpenGLRenderWindow::OpenGLInitContext()
       return;
       }
 
-    if (!GLEW_VERSION_2_1)
+    if (!GLEW_VERSION_3_2)
       {
-      vtkErrorMacro("GL version 2.1 is not supported by your graphics driver.");
-      //m_valid = false;
-      return;
+      if (!GLEW_VERSION_2_1)
+        {
+        vtkErrorMacro("GL version 2.1 is not supported by your graphics driver.");
+        //m_valid = false;
+        return;
+        }
+      vtkWarningMacro(
+        "VTK is designed to work with OpenGL version 3.2 but it appears "
+        "it has been given a context that does not support 3.2. VTK will "
+        "run in a compatibility mode designed to work with OpenGL 2.1 but "
+        "some features may not work.");
+      }
+    else
+      {
+      this->SetContextSupportsOpenGL32(true);
       }
 #endif
     this->Initialized = true;
@@ -441,6 +436,17 @@ void vtkOpenGLRenderWindow::PrintSelf(ostream& os, vtkIndent indent)
   this->Superclass::PrintSelf(os,indent);
 }
 
+void vtkOpenGLRenderWindow::Render()
+{
+  // Query current GL state and store them
+  this->SaveGLState();
+
+  this->Superclass::Render();
+
+  // Restore state to previous known value
+  this->RestoreGLState();
+}
+
 int vtkOpenGLRenderWindow::GetDepthBufferSize()
 {
   GLint size;
@@ -449,7 +455,18 @@ int vtkOpenGLRenderWindow::GetDepthBufferSize()
     {
     this->MakeCurrent();
     size = 0;
-    glGetIntegerv( GL_DEPTH_BITS, &size );
+#if GL_ES_VERSION_2_0 != 1 || GL_ES_VERSION_3_0 == 1
+    if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+      {
+      glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+        GL_DEPTH,
+        GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &size);
+      }
+    else
+#endif
+      {
+      glGetIntegerv( GL_DEPTH_BITS, &size );
+      }
     return static_cast<int>(size);
     }
   else
@@ -475,14 +492,56 @@ int vtkOpenGLRenderWindow::GetColorBufferSizes(int *rgba)
   if ( this->Mapped)
     {
     this->MakeCurrent();
-    glGetIntegerv( GL_RED_BITS, &size );
-    rgba[0] = static_cast<int>(size);
-    glGetIntegerv( GL_GREEN_BITS, &size  );
-    rgba[1] = static_cast<int>(size);
-    glGetIntegerv( GL_BLUE_BITS, &size );
-    rgba[2] = static_cast<int>(size);
-    glGetIntegerv( GL_ALPHA_BITS, &size );
-    rgba[3] = static_cast<int>(size);
+#if GL_ES_VERSION_2_0 != 1 || GL_ES_VERSION_3_0 == 1
+    if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
+      {
+      GLint fboBind = 0;
+      glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fboBind);
+      GLint attachment = GL_BACK_LEFT;
+#ifdef GL_DRAW_BUFFER
+      glGetIntegerv(GL_DRAW_BUFFER, &attachment);
+#endif
+      // GL seems odd with its handling of left/right.
+      // if it says we are using GL_FRONT or GL_BACK
+      // then convert those to GL_FRONT_LEFT and
+      // GL_BACK_LEFT.
+      if (attachment == GL_FRONT)
+        {
+        attachment = GL_FRONT_LEFT;
+        }
+      if (attachment == GL_BACK)
+        {
+        attachment = GL_BACK_LEFT;
+        }
+      glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+        attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &size);
+      rgba[0] = static_cast<int>(size);
+      glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+        attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &size);
+      rgba[1] = static_cast<int>(size);
+      glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+        attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &size);
+      rgba[2] = static_cast<int>(size);
+      glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,
+        attachment,
+        GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &size);
+      rgba[3] = static_cast<int>(size);
+      }
+    else
+#endif
+      {
+      glGetIntegerv( GL_RED_BITS, &size );
+      rgba[0] = static_cast<int>(size);
+      glGetIntegerv( GL_GREEN_BITS, &size  );
+      rgba[1] = static_cast<int>(size);
+      glGetIntegerv( GL_BLUE_BITS, &size );
+      rgba[2] = static_cast<int>(size);
+      glGetIntegerv( GL_ALPHA_BITS, &size );
+      rgba[3] = static_cast<int>(size);
+      }
     return rgba[0]+rgba[1]+rgba[2]+rgba[3];
     }
   else
@@ -691,15 +750,33 @@ void vtkOpenGLRenderWindow::RenderQuad(
   float *tcoords,
   vtkShaderProgram *program, vtkgl::VertexArrayObject *vao)
 {
+  GLuint iboData[] = {0, 1, 2, 0, 2, 3};
+  vtkOpenGLRenderWindow::RenderTriangles(verts, 4,
+    iboData, 6,
+    tcoords,
+    program, vao);
+}
+
+
+// ---------------------------------------------------------------------------
+// a program must be bound
+// a VAO must be bound
+void vtkOpenGLRenderWindow::RenderTriangles(
+  float *verts, unsigned int numVerts,
+  GLuint *iboData, unsigned int numIndices,
+  float *tcoords,
+  vtkShaderProgram *program, vtkgl::VertexArrayObject *vao)
+{
   if (!program || !vao || !verts)
     {
     vtkGenericWarningMacro(<< "Error must have verts, program and vao");
     }
 
   vtkgl::BufferObject vbo;
-  vbo.Upload(verts, 12, vtkgl::BufferObject::ArrayBuffer);
+  vbo.Upload(verts, numVerts*3, vtkgl::BufferObject::ArrayBuffer);
   vao->Bind();
-  if (!vao->AddAttributeArray(program, vbo, "vertexMC", 0, sizeof(float)*3, VTK_FLOAT, 3, false))
+  if (!vao->AddAttributeArray(program, vbo, "vertexMC", 0,
+      sizeof(float)*3, VTK_FLOAT, 3, false))
     {
     vtkGenericWarningMacro(<< "Error setting 'vertexMC' in shader VAO.");
     }
@@ -707,23 +784,23 @@ void vtkOpenGLRenderWindow::RenderQuad(
   vtkgl::BufferObject tvbo;
   if (tcoords)
     {
-    tvbo.Upload(tcoords, 8, vtkgl::BufferObject::ArrayBuffer);
-    if (!vao->AddAttributeArray(program, tvbo, "tcoordMC", 0, sizeof(float)*2, VTK_FLOAT, 2, false))
+    tvbo.Upload(tcoords, numVerts*2, vtkgl::BufferObject::ArrayBuffer);
+    if (!vao->AddAttributeArray(program, tvbo, "tcoordMC", 0,
+        sizeof(float)*2, VTK_FLOAT, 2, false))
       {
       vtkGenericWarningMacro(<< "Error setting 'tcoordMC' in shader VAO.");
       }
     }
 
-  GLuint iboData[] = {0, 1, 2, 0, 2, 3};
   vtkgl::BufferObject ibo;
   vao->Bind();
-  ibo.Upload(iboData, 6, vtkgl::BufferObject::ElementArrayBuffer);
-  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT,
+  ibo.Upload(iboData, numIndices, vtkgl::BufferObject::ElementArrayBuffer);
+  glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT,
     reinterpret_cast<const GLvoid *>(NULL));
   ibo.Release();
-  vao->Release();
   vao->RemoveAttributeArray("vertexMC");
   vao->RemoveAttributeArray("tcoordMC");
+  vao->Release();
   vbo.Release();
   if (tcoords)
     {
@@ -737,9 +814,14 @@ void vtkOpenGLRenderWindow::DrawPixels(
   int srcWidth, int srcHeight, int numComponents, int dataType, void *data)
 {
   glDisable( GL_SCISSOR_TEST );
+  glDisable(GL_DEPTH_TEST);
   if (!this->DrawPixelsTextureObject)
     {
     this->DrawPixelsTextureObject = vtkTextureObject::New();
+    }
+  else
+    {
+    this->DrawPixelsTextureObject->ReleaseGraphicsResources(this);
     }
   this->DrawPixelsTextureObject->SetContext(this);
   this->DrawPixelsTextureObject->Create2DFromRaw(srcWidth, srcHeight,
@@ -757,15 +839,20 @@ void vtkOpenGLRenderWindow::DrawPixels(
   int srcWidth, int srcHeight, int numComponents, int dataType, void *data)
 {
   glDisable( GL_SCISSOR_TEST );
+  glDisable(GL_DEPTH_TEST);
   if (!this->DrawPixelsTextureObject)
     {
     this->DrawPixelsTextureObject = vtkTextureObject::New();
+    }
+  else
+    {
+    this->DrawPixelsTextureObject->ReleaseGraphicsResources(this);
     }
   this->DrawPixelsTextureObject->SetContext(this);
   this->DrawPixelsTextureObject->Create2DFromRaw(srcWidth, srcHeight,
         numComponents, dataType, data);
   this->DrawPixelsTextureObject->CopyToFrameBuffer(
-      srcXmin, srcYmin, srcXmax, srcYmax-1,
+      srcXmin, srcYmin, srcXmax, srcYmax,
       dstXmin, dstYmin, dstXmax, dstYmax,
       this->GetSize()[0], this->GetSize()[1],
       NULL, NULL);
@@ -1546,6 +1633,16 @@ int vtkOpenGLRenderWindow::CreateHardwareOffScreenWindow(int width, int height)
   assert("pre: positive_height" && height>0);
   assert("pre: not_initialized" && !this->OffScreenUseFrameBuffer);
 
+  // This implementation currently ignores multisampling configurations:
+  // the following code causes tests to fail, commenting it out
+  // if (this->MultiSamples > 1)
+  //   {
+  //   vtkDebugMacro(<<"Multisampling is not currently supported by the "
+  //                 "accelerated offscreen rendering backend. Falling back to "
+  //                 "a platform-specific offscreen solution...");
+  //   return 0;
+  //   }
+
   // 1. create a regular OpenGLcontext (ie create a window)
   this->CreateAWindow();
   this->MakeCurrent();
@@ -1781,4 +1878,28 @@ vtkTextureUnitManager *vtkOpenGLRenderWindow::GetTextureUnitManager()
 void vtkOpenGLRenderWindow::WaitForCompletion()
 {
   glFinish();
+}
+
+// ----------------------------------------------------------------------------
+void vtkOpenGLRenderWindow::SaveGLState()
+{
+  // For now just query the active texture unit
+  if (this->Initialized)
+    {
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &this->GLStateIntegers["GL_ACTIVE_TEXTURE"]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+void vtkOpenGLRenderWindow::RestoreGLState()
+{
+  // Prevent making GL calls unless we have a valid context
+  if (this->Initialized)
+    {
+    // For now just re-store the texture unit
+    glActiveTexture(GL_TEXTURE0 + this->GLStateIntegers["GL_ACTIVE_TEXTURE"]);
+
+    // Unuse active shader program
+    this->GetShaderCache()->ReleaseCurrentShader();
+    }
 }

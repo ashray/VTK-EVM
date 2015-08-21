@@ -89,7 +89,7 @@ vtkStringArray::vtkStringArray()
 
 vtkStringArray::~vtkStringArray()
 {
-  if ((this->Array) && (!this->SaveUserArray))
+  if (!this->SaveUserArray)
     {
     delete [] this->Array;
     }
@@ -141,7 +141,7 @@ int vtkStringArray::Allocate(vtkIdType sz, vtkIdType)
 {
   if(sz > this->Size)
     {
-    if(this->Array && !this->SaveUserArray)
+    if(!this->SaveUserArray)
       {
       delete [] this->Array;
       }
@@ -166,7 +166,7 @@ int vtkStringArray::Allocate(vtkIdType sz, vtkIdType)
 
 void vtkStringArray::Initialize()
 {
-  if(this->Array && !this->SaveUserArray)
+  if(!this->SaveUserArray)
     {
     delete [] this->Array;
     }
@@ -211,7 +211,7 @@ void vtkStringArray::DeepCopy(vtkAbstractArray* aa)
     }
 
   // Free our previous memory.
-  if(this->Array && !this->SaveUserArray)
+  if(!this->SaveUserArray)
     {
     delete [] this->Array;
     }
@@ -456,7 +456,10 @@ void vtkStringArray::InsertValue(vtkIdType id, vtkStdString f)
 {
   if ( id >= this->Size )
     {
-    this->ResizeAndExtend(id+1);
+    if (!this->ResizeAndExtend(id+1))
+      {
+      return;
+      }
     }
   this->Array[id] = f;
   if ( id > this->MaxId )
@@ -493,7 +496,7 @@ unsigned long vtkStringArray::GetActualMemorySize( void )
     }
 
   return static_cast<unsigned long>(
-    ceil(static_cast<double>(totalSize) / 1024.0 )); // kilobytes
+    ceil(static_cast<double>(totalSize) / 1024.0 )); // kibibytes
 }
 
 // ----------------------------------------------------------------------------

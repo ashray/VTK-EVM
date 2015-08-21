@@ -22,10 +22,13 @@ varying vec2 tcoordVC;
 uniform sampler2D translucentRGBATexture;
 uniform sampler2D opaqueRGBATexture;
 
+// the output of this shader
+//VTK::Output::Dec
+
 void main()
 {
   vec4 t1Color = texture2D(translucentRGBATexture, tcoordVC);
   vec4 t2Color = texture2D(opaqueRGBATexture, tcoordVC);
-  gl_FragColor.a = 1.0;
-  gl_FragColor.rgb = (t1Color.rgb*t1Color.a + t2Color.rgb*(1.0-t1Color.a));
+  gl_FragData[0].a = 1.0;
+  gl_FragData[0].rgb = (t1Color.rgb*t1Color.a + t2Color.rgb*(1.0-t1Color.a));
 }

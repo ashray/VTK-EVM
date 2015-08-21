@@ -31,6 +31,7 @@ namespace vtkgl
 {
 class VertexArrayObject;
 class CellBO;
+class BufferObject;
 }
 
 #if GL_ES_VERSION_2_0 != 1 || GL_ES_VERSION_3_0 == 1
@@ -103,10 +104,10 @@ public:
   enum
   {
     alpha=0,
-    alpha4,
     alpha8,
-    alpha12,
     alpha16,
+    alpha16f,
+    alpha32f,
     NumberOfAlphaFormats
   };
 
@@ -203,6 +204,12 @@ public:
   bool CreateDepthFromRaw(unsigned int width, unsigned int height,
                           int internalFormat, int rawType,
                           void *raw);
+
+  // Description:
+  // Create a texture buffer basically a 1D texture that can be
+  // very large for passing data into the fragment shader
+  bool CreateTextureBuffer(unsigned int numValues, int numComps,
+                           int dataType, vtkgl::BufferObject *bo);
 
 // 1D  textures are not supported in ES 2.0 or 3.0
 #if GL_ES_VERSION_2_0 != 1
@@ -308,6 +315,10 @@ public:
                 int vtktype, bool shaderSupportsTextureInt);
   bool Create3D(unsigned int width, unsigned int height, unsigned int depth,
                 int numComps, int vtktype, bool shaderSupportsTextureInt);
+
+  // Description:
+  // Get the data type for the texture as a vtk type int i.e. VTK_INT etc.
+  int GetVTKDataType();
 
   // Description:
   // Get the data type for the texture as GLenum type.
@@ -639,6 +650,9 @@ protected:
 
   // used for copying to framebuffer
   vtkgl::CellBO *ShaderProgram;
+
+  // for texturebuffers we hold on to the Buffer
+  vtkgl::BufferObject *BufferObject;
 
 private:
   vtkTextureObject(const vtkTextureObject&); // Not implemented.

@@ -14,7 +14,10 @@
 =========================================================================*/
 #include "vtkExternalOpenGLCamera.h"
 
+#ifndef VTK_OPENGL2
 #include "vtkgluPickMatrix.h"
+#endif
+
 #include "vtkMatrix4x4.h"
 #include "vtkObjectFactory.h"
 #include "vtkOpenGLError.h"
@@ -36,11 +39,15 @@ vtkExternalOpenGLCamera::vtkExternalOpenGLCamera()
   this->UserProvidedViewTransform = false;
 }
 
-
 //----------------------------------------------------------------------------
 // Implement base class method.
 void vtkExternalOpenGLCamera::Render(vtkRenderer *ren)
 {
+#ifdef VTK_OPENGL2
+  this->Superclass::Render(ren);
+
+#else
+
   vtkOpenGLClearErrorMacro();
 
   double aspect[2];
@@ -53,6 +60,12 @@ void vtkExternalOpenGLCamera::Render(vtkRenderer *ren)
   // find out if we should stereo render
   this->Stereo = (ren->GetRenderWindow())->GetStereoRender();
   ren->GetTiledSizeAndOrigin(&usize, &vsize, lowerLeft, lowerLeft+1);
+
+  // Take the window position into account
+  for (int i = 0; i < 2; ++i)
+    {
+    lowerLeft[i] = lowerLeft[i] + ren->GetRenderWindow()->GetPosition()[i];
+    }
 
   // if were on a stereo renderer draw to special parts of screen
   if (this->Stereo)
@@ -182,6 +195,8 @@ void vtkExternalOpenGLCamera::Render(vtkRenderer *ren)
   matrix->Delete();
 
   vtkOpenGLCheckErrorMacro("failed after Render");
+
+#endif
 }
 
 //----------------------------------------------------------------------------

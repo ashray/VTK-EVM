@@ -815,7 +815,6 @@ int vtkUnstructuredGridGeometryFilter::RequestData(
     }
   vtkPointData *pd=input->GetPointData();
   vtkCellData *cd=input->GetCellData();
-  vtkFieldData *fd=input->GetFieldData();
   vtkIdType numPts=input->GetNumberOfPoints();
   vtkPoints *inPts=input->GetPoints();
   vtkSmartPointer<vtkCellIterator> cellIter =
@@ -824,7 +823,6 @@ int vtkUnstructuredGridGeometryFilter::RequestData(
   // Output
   vtkPointData *outputPD=output->GetPointData();
   vtkCellData *outputCD=output->GetCellData();
-  vtkFieldData *outputFD=output->GetFieldData();
 //  vtkUnsignedCharArray *types=vtkUnsignedCharArray::New();
 //  types->Allocate(numCells);
 //  vtkIdTypeArray *locs=vtkIdTypeArray::New();
@@ -832,16 +830,11 @@ int vtkUnstructuredGridGeometryFilter::RequestData(
 //  vtkCellArray *conn=vtkCellArray::New();
 //  conn->Allocate(numCells);
 
-  // Ghost cells
-  unsigned char updateLevel=(unsigned char)(
-    outInfo->Get(vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_GHOST_LEVELS()));
-
-
   unsigned char *cellGhostLevels=0;
   vtkDataArray *temp=0;
   if(cd!=0)
     {
-    temp=cd->GetArray("vtkGhostLevels");
+    temp=cd->GetArray(vtkDataSetAttributes::GhostArrayName());
     }
   if(temp!=0&&temp->GetDataType()==VTK_UNSIGNED_CHAR&&temp->GetNumberOfComponents()==1)
     {
@@ -881,7 +874,8 @@ int vtkUnstructuredGridGeometryFilter::RequestData(
       cellId = cellIter->GetCellId();
       npts = cellIter->GetNumberOfPoints();
       pts = cellIter->GetPointIds()->GetPointer(0);
-      if((cellGhostLevels!=0 && cellGhostLevels[cellId] > updateLevel)||
+      if((cellGhostLevels!=0 &&
+          cellGhostLevels[cellId] & vtkDataSetAttributes::DUPLICATECELL)||
          (this->CellClipping && (cellId < this->CellMinimum ||
                                  cellId > this->CellMaximum)) )
         {
@@ -937,9 +931,6 @@ int vtkUnstructuredGridGeometryFilter::RequestData(
     originalCellIds->SetNumberOfComponents(1);
     originalCellIds->Allocate(numCells, numCells/2);
     }
-
-  // Shallow copy field data not associated with points or cells
-  outputFD->ShallowCopy(fd);
 
   vtkIdType *pointMap=0;
 

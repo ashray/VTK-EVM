@@ -50,10 +50,17 @@ vtkOpenGLGlyph3DHelper::vtkOpenGLGlyph3DHelper()
   this->UseFastPath = false;
   this->UsingInstancing = false;
 
-  // we always tell our triangle VAO to emulate to be safe
-  // this is because it seems that GLEW_ARB_vertex_array_object
-  // does not always handle the attributes for GLEW_ARB_instanced_arrays
-  this->Tris.vao.SetForceEmulation(true);
+}
+
+// ---------------------------------------------------------------------------
+// Description:
+// Release any graphics resources that are being consumed by this mapper.
+void vtkOpenGLGlyph3DHelper::ReleaseGraphicsResources(vtkWindow *window)
+{
+  this->NormalMatrixBuffer.ReleaseGraphicsResources();
+  this->MatrixBuffer.ReleaseGraphicsResources();
+  this->ColorBuffer.ReleaseGraphicsResources();
+  this->Superclass::ReleaseGraphicsResources(window);
 }
 
 //-----------------------------------------------------------------------------
@@ -81,6 +88,12 @@ void vtkOpenGLGlyph3DHelper::ReplaceShaderValues(std::string &VSSource,
       "//VTK::PositionVC::Impl",
       "vertexVC = MCVCMatrix * vertex;\n"
       "  gl_Position = MCDCMatrix * vertex;\n");
+    }
+  else
+    {
+    substitute(VSSource,
+      "//VTK::PositionVC::Impl",
+      "gl_Position = MCDCMatrix * vertex;\n");
     }
 
   // deal with color
@@ -290,6 +303,13 @@ void vtkOpenGLGlyph3DHelper::GlyphRender(vtkRenderer* ren, vtkActor* actor, vtkI
       std::vector<float> &normalMatrices, std::vector<vtkIdType> &pickIds,
       unsigned long pointMTime)
 {
+  // we always tell our triangle VAO to emulate unless we
+  // have opngl 3.2 to be safe
+  // this is because it seems that GLEW_ARB_vertex_array_object
+  // does not always handle the attributes for GLEW_ARB_instanced_arrays
+  this->Tris.vao.SetForceEmulation(
+    !vtkOpenGLRenderWindow::GetContextSupportsOpenGL32());
+
   this->CurrentInput = this->GetInput();
   this->UsingInstancing = false;
 
@@ -299,9 +319,7 @@ void vtkOpenGLGlyph3DHelper::GlyphRender(vtkRenderer* ren, vtkActor* actor, vtkI
 
 #if GL_ES_VERSION_2_0 != 1 || GL_ES_VERSION_3_0 == 1
   if (actor->GetProperty()->GetRepresentation() == VTK_SURFACE &&
-      !selector &&
-      (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32() ||
-        GLEW_ARB_instanced_arrays))
+      !selector && GLEW_ARB_instanced_arrays)
     {
     this->GlyphRenderInstances(ren, actor, numPts,
       colors, matrices, normalMatrices, pointMTime);
@@ -360,11 +378,11 @@ void vtkOpenGLGlyph3DHelper::GlyphRender(vtkRenderer* ren, vtkActor* actor, vtkI
       // TODO wireframe of triangles is not lit properly right now
       // you either have to generate normals and send them down
       // or use a geometry shader.
-      glMultiDrawElements(GL_LINE_LOOP,
-                        (GLsizei *)(&this->Tris.elementsArray[0]),
-                        GL_UNSIGNED_INT,
-                        reinterpret_cast<const GLvoid **>(&(this->Tris.offsetArray[0])),
-                        (GLsizei)this->Tris.offsetArray.size());
+      glDrawRangeElements(GL_LINES, 0,
+                          static_cast<GLuint>(layout.VertexCount - 1),
+                          static_cast<GLsizei>(this->Tris.indexCount),
+                          GL_UNSIGNED_INT,
+                          reinterpret_cast<const GLvoid *>(NULL));
       }
     if (actor->GetProperty()->GetRepresentation() == VTK_SURFACE)
       {
@@ -493,15 +511,7 @@ void vtkOpenGLGlyph3DHelper::GlyphRenderInstances(
                         reinterpret_cast<const GLvoid *>(NULL),
                         numPts);
 #else
-  if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
-    {
-    glDrawElementsInstanced(GL_TRIANGLES,
-                          static_cast<GLsizei>(this->Tris.indexCount),
-                          GL_UNSIGNED_INT,
-                          reinterpret_cast<const GLvoid *>(NULL),
-                          numPts);
-    }
-  else if (GLEW_ARB_instanced_arrays)
+  if (GLEW_ARB_instanced_arrays)
     {
     glDrawElementsInstancedARB(GL_TRIANGLES,
                           static_cast<GLsizei>(this->Tris.indexCount),

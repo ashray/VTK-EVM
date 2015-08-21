@@ -39,6 +39,7 @@
 #include "vtkXMLDataHeaderPrivate.h"
 #undef vtkXMLDataHeaderPrivate_DoNotInclude
 #include "vtkXMLDataElement.h"
+#include "vtkXMLReaderVersion.h"
 #include "vtkInformationQuadratureSchemeDefinitionVectorKey.h"
 #include "vtkQuadratureSchemeDefinition.h"
 #include "vtkInformationStringKey.h"
@@ -339,6 +340,7 @@ vtkXMLWriter::vtkXMLWriter()
   this->UserContinueExecuting = -1; //invalid state
   this->NumberOfTimeValues = NULL;
   this->FieldDataOM = new OffsetsManagerGroup;
+  this->UsePreviousVersion = true;
 }
 
 //----------------------------------------------------------------------------
@@ -347,17 +349,10 @@ vtkXMLWriter::~vtkXMLWriter()
   this->SetFileName(0);
   this->DataStream->Delete();
   this->SetCompressor(0);
-  if (this->OutFile)
-    {
-    delete this->OutFile;
-    this->OutFile = 0;
-    }
-  if (this->OutStringStream)
-    {
-    delete this->OutStringStream;
-    this->OutStringStream = 0;
-    }
-
+  delete this->OutFile;
+  this->OutFile = 0;
+  delete this->OutStringStream;
+  this->OutStringStream = 0;
   delete this->FieldDataOM;
   delete[] this->NumberOfTimeValues;
 }
@@ -719,11 +714,8 @@ int vtkXMLWriter::OpenStream()
 //----------------------------------------------------------------------------
 int vtkXMLWriter::OpenFile()
 {
-  if (this->OutFile)
-    {
-    delete this->OutFile;
-    this->OutFile = 0;
-    }
+  delete this->OutFile;
+  this->OutFile = 0;
 
   // Strip trailing whitespace from the filename.
   int len = static_cast<int>(strlen(this->FileName));
@@ -758,12 +750,7 @@ int vtkXMLWriter::OpenFile()
 //----------------------------------------------------------------------------
 int vtkXMLWriter::OpenString()
 {
-  if (this->OutStringStream)
-    {
-    delete this->OutStringStream;
-    this->OutStringStream = 0;
-    }
-
+  delete this->OutStringStream;
   this->OutStringStream = new vtksys_ios::ostringstream();
   this->Stream = this->OutStringStream;
 
@@ -835,13 +822,27 @@ int vtkXMLWriter::WriteInternal()
 //----------------------------------------------------------------------------
 int vtkXMLWriter::GetDataSetMajorVersion()
 {
-  return (this->HeaderType == vtkXMLWriter::UInt64) ? 1 : 0;
+  if (this->UsePreviousVersion)
+    {
+    return (this->HeaderType == vtkXMLWriter::UInt64) ? 1 : 0;
+    }
+  else
+    {
+    return vtkXMLReaderMajorVersion;
+    }
 }
 
 //----------------------------------------------------------------------------
 int vtkXMLWriter::GetDataSetMinorVersion()
 {
-  return (this->HeaderType == vtkXMLWriter::UInt64) ? 0 : 1;
+  if (this->UsePreviousVersion)
+    {
+    return (this->HeaderType == vtkXMLWriter::UInt64) ? 0 : 1;
+    }
+  else
+    {
+    return vtkXMLReaderMinorVersion;
+    }
 }
 
 //----------------------------------------------------------------------------
@@ -911,11 +912,10 @@ void vtkXMLWriter::WriteFileAttributes()
     {
     os << " header_type=\"UInt64\"";
     }
-#if 0 // future: else if (this->FileMajorVersion >= 1)
+  else
     {
     os << " header_type=\"UInt32\"";
     }
-#endif
 
   // Write the compressor that will be used for the file.
   if (this->Compressor)
@@ -1282,7 +1282,7 @@ int vtkXMLWriter::WriteBinaryDataInternal(vtkAbstractArray* a)
     }
 
   // Free the byte swap buffer if it was allocated.
-  if (this->ByteSwapBuffer && !this->Int32IdTypeBuffer)
+  if (!this->Int32IdTypeBuffer)
     {
     delete [] this->ByteSwapBuffer;
     this->ByteSwapBuffer = 0;
@@ -1540,6 +1540,7 @@ size_t vtkXMLWriter::GetWordTypeSize(int dataType)
 
     case VTK_STRING:
       size = sizeof(vtkStdString::value_type);
+      break;
 
     default:
       vtkWarningMacro("Unsupported data type: " << dataType);
@@ -1557,7 +1558,7 @@ const char* vtkXMLWriter::GetWordTypeName(int dataType)
   // These string values must match vtkXMLDataElement::GetWordTypeAttribute().
   switch (dataType)
     {
-  case VTK_STRING:           return "String";
+    case VTK_STRING:         return "String";
     case VTK_FLOAT:          return "Float32";
     case VTK_DOUBLE:         return "Float64";
     case VTK_ID_TYPE:

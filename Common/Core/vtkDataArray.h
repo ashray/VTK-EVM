@@ -41,6 +41,7 @@ class vtkDoubleArray;
 class vtkIdList;
 class vtkInformationDoubleVectorKey;
 class vtkLookupTable;
+class vtkPoints;
 
 class VTKCOMMONCORE_EXPORT vtkDataArray : public vtkAbstractArray
 {
@@ -275,7 +276,7 @@ public:
   virtual void* WriteVoidPointer(vtkIdType id, vtkIdType number) = 0;
 
   // Description:
-  // Return the memory in kilobytes consumed by this data array. Used to
+  // Return the memory in kibibytes (1024 bytes) consumed by this data array. Used to
   // support streaming and reading/writing data. The value returned is
   // guaranteed to be greater than or equal to the memory required to
   // actually represent the data represented by this object. The
@@ -395,6 +396,9 @@ public:
   virtual int GetArrayType() { return DataArray; }
 
 protected:
+
+  friend class vtkPoints;
+
   // Description:
   // Compute the range for a specific component. If comp is set -1
   // then L2 norm is computed on all components. Call ClearRange

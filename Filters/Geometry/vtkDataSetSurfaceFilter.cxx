@@ -192,9 +192,7 @@ int vtkDataSetSurfaceFilter::RequestData(
     case  VTK_UNSTRUCTURED_GRID:
     case  VTK_UNSTRUCTURED_GRID_BASE:
       {
-      if (!this->UnstructuredGridExecute(
-            input, output, outInfo->Get(
-              vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_GHOST_LEVELS())))
+      if (!this->UnstructuredGridExecute(input, output))
         {
         return 1;
         }
@@ -213,7 +211,7 @@ int vtkDataSetSurfaceFilter::RequestData(
     case VTK_STRUCTURED_GRID:
       {
       vtkStructuredGrid *grid = vtkStructuredGrid::SafeDownCast(input);
-      if (grid->GetCellBlanking())
+      if (grid->HasAnyBlankCells())
         {
         return this->DataSetExecute(grid, output);
         }
@@ -519,14 +517,8 @@ int vtkDataSetSurfaceFilter::StructuredExecute(vtkDataSet *input,
       break;
       }
     case VTK_UNIFORM_GRID:
-      {
-      // same as vtk_image_data
-      }
     case VTK_STRUCTURED_POINTS:
-      {
-      // same as vtk_image_data
-      }
-     case VTK_IMAGE_DATA:
+    case VTK_IMAGE_DATA:
       {
       dataType = VTK_DOUBLE;
       break;
@@ -534,6 +526,7 @@ int vtkDataSetSurfaceFilter::StructuredExecute(vtkDataSet *input,
     default:
       dataType = VTK_DOUBLE;
       vtkWarningMacro("Invalid data set type.");
+      break;
     }
 
   outPoints->SetDataType(dataType);
@@ -1097,7 +1090,7 @@ int vtkDataSetSurfaceFilter::DataSetExecute(vtkDataSet *input,
     }
 
   vtkStructuredGrid *sgridInput = vtkStructuredGrid::SafeDownCast(input);
-  bool mayBlank = sgridInput && sgridInput->GetCellBlanking();
+  bool mayBlank = sgridInput && sgridInput->HasAnyBlankCells();
 
   cellIds = vtkIdList::New();
   pts = vtkIdList::New();
@@ -1308,8 +1301,7 @@ void vtkDataSetSurfaceFilter::PrintSelf(ostream& os, vtkIndent indent)
 
 //----------------------------------------------------------------------------
 int vtkDataSetSurfaceFilter::UnstructuredGridExecute(vtkDataSet *dataSetInput,
-                                                     vtkPolyData *output,
-                                                     int updateGhostLevel)
+                                                     vtkPolyData *output)
 {
   vtkUnstructuredGridBase *input =
       vtkUnstructuredGridBase::SafeDownCast(dataSetInput);
@@ -1368,8 +1360,7 @@ int vtkDataSetSurfaceFilter::UnstructuredGridExecute(vtkDataSet *dataSetInput,
     cellIter = vtkSmartPointer<vtkCellIterator>::Take(input->NewCellIterator());
     }
 
-  vtkUnsignedCharArray* ghosts = vtkUnsignedCharArray::SafeDownCast(
-    input->GetPointData()->GetArray("vtkGhostLevels"));
+  vtkUnsignedCharArray* ghosts = input->GetPointGhostArray();
   vtkCellArray *newVerts;
   vtkCellArray *newLines;
   vtkCellArray *newPolys;
@@ -1997,10 +1988,6 @@ int vtkDataSetSurfaceFilter::UnstructuredGridExecute(vtkDataSet *dataSetInput,
     {
     this->OriginalPointIds->Delete();
     this->OriginalPointIds = NULL;
-    }
-  if (this->PieceInvariant)
-    {
-    output->RemoveGhostCells(updateGhostLevel+1);
     }
 
   this->DeleteQuadHash();

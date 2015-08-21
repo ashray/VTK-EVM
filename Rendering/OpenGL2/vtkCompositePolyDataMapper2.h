@@ -26,8 +26,6 @@
 #include "vtkRenderingOpenGL2Module.h" // For export macro
 #include "vtkGenericCompositePolyDataMapper2.h"
 
-class vtkCompositePolyDataMapper2Internal;
-
 class VTKRENDERINGOPENGL2_EXPORT vtkCompositePolyDataMapper2 : public vtkGenericCompositePolyDataMapper2
 {
 public:
@@ -51,7 +49,9 @@ protected:
   // Build the VBO/IBO, called by UpdateBufferObjects
   virtual void BuildBufferObjects(vtkRenderer *ren, vtkActor *act);
   virtual void AppendOneBufferObject(vtkRenderer *ren,
-    vtkActor *act, vtkPolyData *pd, unsigned int flat_index);
+    vtkActor *act, vtkPolyData *pd, unsigned int flat_index,
+    std::vector<unsigned char> &colors,
+    std::vector<float> &norms);
 
   std::vector<unsigned int> VertexOffsets;
   std::vector<unsigned int> IndexOffsets;
@@ -91,6 +91,17 @@ protected:
     unsigned int &lastVertex,
     unsigned int &lastIndex,
     unsigned int &lastEdgeIndex);
+
+  // Description:
+  // Returns if we can use texture maps for scalar coloring. Note this doesn't
+  // say we "will" use scalar coloring. It says, if we do use scalar coloring,
+  // we will use a texture.
+  // When rendering multiblock datasets, if any 2 blocks provide different
+  // lookup tables for the scalars, then also we cannot use textures. This case
+  // can be handled if required.
+  virtual int CanUseTextureMapForColoring(vtkDataObject* input);
+  bool CanUseTextureMapForColoringSet;
+  int CanUseTextureMapForColoringValue;
 
 private:
   vtkCompositePolyDataMapper2(

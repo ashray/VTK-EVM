@@ -285,6 +285,43 @@ void vtkOpenGLContextDevice2D::DrawPoly(float *f, int n, unsigned char *colors,
 }
 
 //-----------------------------------------------------------------------------
+void vtkOpenGLContextDevice2D::DrawLines(float *f, int n, unsigned char *colors,
+                                         int nc)
+{
+  assert("f must be non-null" && f != NULL);
+  assert("n must be greater than 0" && n > 0);
+
+  vtkOpenGLClearErrorMacro();
+
+  this->SetLineType(this->Pen->GetLineType());
+  this->SetLineWidth(this->Pen->GetWidth());
+
+  if (colors)
+    {
+    glEnableClientState(GL_COLOR_ARRAY);
+    glColorPointer(nc, GL_UNSIGNED_BYTE, 0, colors);
+    }
+  else
+    {
+    glColor4ubv(this->Pen->GetColor());
+    }
+  glEnableClientState(GL_VERTEX_ARRAY);
+  glVertexPointer(2, GL_FLOAT, 0, f);
+  glDrawArrays(GL_LINES, 0, n);
+  glDisableClientState(GL_VERTEX_ARRAY);
+  if (colors)
+    {
+    glDisableClientState(GL_COLOR_ARRAY);
+    }
+
+  // Restore line type and width.
+  this->SetLineType(vtkPen::SOLID_LINE);
+  this->SetLineWidth(1.0f);
+
+  vtkOpenGLCheckErrorMacro("failed after DrawLines");
+}
+
+//-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::DrawPoints(float *f, int n, unsigned char *c,
                                           int nc)
 {
@@ -834,7 +871,8 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
   if (image->GetNumberOfPoints() == 0 && image->GetNumberOfCells() == 0)
     {
     int textDims[2];
-    if (!this->TextRenderer->RenderString(this->TextProp, string, image,
+    if (!this->TextRenderer->RenderString(this->TextProp, string,
+                                          this->RenderWindow->GetDPI(), image,
                                           textDims))
       {
       return;
@@ -886,7 +924,8 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
 void vtkOpenGLContextDevice2D::ComputeStringBounds(const vtkUnicodeString &string,
                                                    float bounds[4])
 {
-  vtkVector2i box = this->TextRenderer->GetBounds(this->TextProp, string);
+  vtkVector2i box = this->TextRenderer->GetBounds(this->TextProp, string,
+                                                  this->RenderWindow->GetDPI());
   // Check for invalid bounding box
   if (box[0] == VTK_INT_MIN || box[0] == VTK_INT_MAX ||
       box[1] == VTK_INT_MIN || box[1] == VTK_INT_MAX)
@@ -1473,6 +1512,7 @@ vtkImageData *vtkOpenGLContextDevice2D::GenerateMarker(int shape, int width,
       }
     default: // Maintaining old behavior, which produces plus for unknown shape
       vtkWarningMacro(<<"Invalid marker shape: " << shape);
+      VTK_FALLTHROUGH;
     case VTK_MARKER_PLUS:
       {
       int center = (width + 1) / 2;
@@ -1548,20 +1588,20 @@ void vtkOpenGLContextDevice2D::PrintSelf(ostream &os, vtkIndent indent)
   this->Superclass::PrintSelf(os, indent);
   os << indent << "Renderer: ";
   if (this->Renderer)
-  {
+    {
     os << endl;
     this->Renderer->PrintSelf(os, indent.GetNextIndent());
-  }
+    }
   else
     {
     os << "(none)" << endl;
     }
   os << indent << "Text Renderer: ";
-  if (this->Renderer)
-  {
+  if (this->TextRenderer)
+    {
     os << endl;
     this->TextRenderer->PrintSelf(os, indent.GetNextIndent());
-  }
+    }
   else
     {
     os << "(none)" << endl;

@@ -584,6 +584,7 @@ int vtkImageReslice::RequestUpdateExtent(
   vtkInformation *inInfo = inputVector[0]->GetInformationObject(0);
 
   outInfo->Get(vtkStreamingDemandDrivenPipeline::UPDATE_EXTENT(), outExt);
+  this->HitInputExtent = 1;
 
   if (this->ResliceTransform)
     {
@@ -705,7 +706,6 @@ int vtkImageReslice::RequestUpdateExtent(
   // Clip to whole extent, make sure we hit the extent
   int wholeExtent[6];
   inInfo->Get(vtkStreamingDemandDrivenPipeline::WHOLE_EXTENT(), wholeExtent);
-  this->HitInputExtent = 1;
 
   for (int k = 0; k < 3; k++)
     {
@@ -1774,6 +1774,7 @@ void vtkGetSetPixelsFunc(
         default:
           *setpixels = 0;
         }
+      break;
     case 2:
       switch (dataType)
         {
@@ -1783,6 +1784,7 @@ void vtkGetSetPixelsFunc(
         default:
           *setpixels = 0;
         }
+      break;
     case 3:
       switch (dataType)
         {
@@ -1792,6 +1794,7 @@ void vtkGetSetPixelsFunc(
         default:
           *setpixels = 0;
         }
+      break;
     case 4:
       switch (dataType)
         {
@@ -1801,6 +1804,7 @@ void vtkGetSetPixelsFunc(
         default:
           *setpixels = 0;
         }
+      break;
     default:
       switch (dataType)
         {

@@ -161,7 +161,6 @@ set(Module_SRCS
   vtkStructuredGrid.cxx
   vtkStructuredPointsCollection.cxx
   vtkStructuredPoints.cxx
-  vtkStructuredVisibilityConstraint.cxx
   vtkSuperquadric.cxx
   vtkTable.cxx
   vtkTensor.cxx
@@ -281,6 +280,7 @@ set_source_files_properties(
 
 set_source_files_properties(
   vtkCellType.h
+  vtkBoundingBox.cxx
   vtkColor.h
   vtkRect.h
   vtkVector.h

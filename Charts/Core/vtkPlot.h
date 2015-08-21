@@ -210,6 +210,19 @@ public:
   // column in the vtkTable.
   virtual void SetInputArray(int index, const vtkStdString &name);
 
+  // Description:
+  // Set whether the plot can be selected. True by default.
+  // If not, then SetSelection(), SelectPoints() or SelectPointsInPolygon()
+  // won't have any effect.
+  // \sa SetSelection(), SelectPoints(), SelectPointsInPolygon()
+  vtkSetMacro(Selectable,bool);
+  vtkGetMacro(Selectable,bool);
+  vtkBooleanMacro(Selectable,bool);
+
+  // Description:
+  // Sets the list of points that must be selected.
+  // If Selectable is false, then this method does nothing.
+  // \sa SetSelectable()
   virtual void SetSelection(vtkIdTypeArray *id);
   vtkGetObjectMacro(Selection, vtkIdTypeArray);
 
@@ -268,6 +281,13 @@ public:
     return this->GetBounds(bounds);
     }
 
+  // Description:
+  // Subclasses that build data caches to speed up painting should override this
+  // method to update such caches. This is called on each Paint, hence
+  // subclasses must add checks to avoid rebuilding of cache, unless necessary.
+  // Default implementation is empty.
+  virtual void UpdateCache() {}
+
 //BTX
   // Description:
   // A General setter/getter that should be overridden. It can silently drop
@@ -324,6 +344,10 @@ protected:
   // This data member contains the data that will be plotted, it inherits
   // from vtkAlgorithm.
   vtkSmartPointer<vtkContextMapper2D> Data;
+
+  // Description:
+  // Whether plot points can be selected or not.
+  bool Selectable;
 
   // Description:
   // Selected indices for the table the plot is rendering

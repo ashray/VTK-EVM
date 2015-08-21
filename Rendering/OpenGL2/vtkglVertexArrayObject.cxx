@@ -88,7 +88,9 @@ public:
 
   void Initialize()
   {
-    if (!this->ForceEmulation && GLEW_ARB_vertex_array_object)
+    if (!this->ForceEmulation &&
+        (GLEW_ARB_vertex_array_object ||
+            vtkOpenGLRenderWindow::GetContextSupportsOpenGL32()))
       {
       this->supported = true;
       glGenVertexArrays(1, &this->handleVAO);
@@ -176,11 +178,7 @@ void VertexArrayObject::Bind()
 #if GL_ES_VERSION_3_0 == 1
             glVertexAttribDivisor(attrIt->index+i, 1);
 #else
-            if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
-              {
-              glVertexAttribDivisor(attrIt->index+i, 1);
-              }
-            else if (GLEW_ARB_instanced_arrays)
+            if (GLEW_ARB_instanced_arrays)
               {
               glVertexAttribDivisorARB(attrIt->index+i, 1);
               }
@@ -218,11 +216,7 @@ void VertexArrayObject::Release()
 #if GL_ES_VERSION_3_0 == 1
             glVertexAttribDivisor(attrIt->index+i, 0);
 #else
-            if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
-              {
-              glVertexAttribDivisor(attrIt->index+i, 0);
-              }
-            else if (GLEW_ARB_instanced_arrays)
+            if (GLEW_ARB_instanced_arrays)
               {
               glVertexAttribDivisorARB(attrIt->index+i, 0);
               }
@@ -313,11 +307,7 @@ bool VertexArrayObject::AddAttributeArrayWithDivisor(vtkShaderProgram *program,
 #if GL_ES_VERSION_3_0 == 1
     glVertexAttribDivisor(attribs.index, 1);
 #else
-    if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
-      {
-      glVertexAttribDivisor(attribs.index, 1);
-      }
-    else if (GLEW_ARB_instanced_arrays)
+    if (GLEW_ARB_instanced_arrays)
       {
       glVertexAttribDivisorARB(attribs.index, 1);
       }
@@ -391,14 +381,10 @@ bool VertexArrayObject::AddAttributeMatrixWithDivisor(vtkShaderProgram *program,
 #if GL_ES_VERSION_3_0 == 1
       glVertexAttribDivisor(attribs.index+i, 1);
 #else
-      if (vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
-        {
-        glVertexAttribDivisor(attribs.index+i, 1);
-        }
-      else if (GLEW_ARB_instanced_arrays)
+      if (GLEW_ARB_instanced_arrays)
         {
         glVertexAttribDivisorARB(attribs.index+i, 1);
-       }
+        }
 #endif
 #endif
       }

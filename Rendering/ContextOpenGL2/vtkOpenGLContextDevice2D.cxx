@@ -47,8 +47,17 @@
 #include "vtkAbstractContextBufferId.h"
 
 #include "vtkOpenGLShaderCache.h"
+#include "vtkShaderProgram.h"
+
+#include "vtkTransform.h"
+#include "vtkOpenGLTexture.h"
+#include "vtkglVBOHelper.h"
+#include "vtkTextureUnitManager.h"
 
 #include <algorithm>
+
+#define BUFFER_OFFSET(i) ((char *)NULL + (i))
+
 
 //-----------------------------------------------------------------------------
 vtkStandardNewMacro(vtkOpenGLContextDevice2D)
@@ -62,11 +71,29 @@ vtkOpenGLContextDevice2D::vtkOpenGLContextDevice2D()
   this->Storage = new vtkOpenGLContextDevice2D::Private;
   this->RenderWindow = NULL;
   this->MaximumMarkerCacheSize = 20;
+  this->ProjectionMatrix = vtkTransform::New();
+  this->ModelMatrix = vtkTransform::New();
+  this->VBO =  new vtkgl::CellBO;
+  this->VCBO =  new vtkgl::CellBO;
+  this->VTBO =  new vtkgl::CellBO;
+  this->SBO =  new vtkgl::CellBO;
+  this->SCBO =  new vtkgl::CellBO;
 }
 
 //-----------------------------------------------------------------------------
 vtkOpenGLContextDevice2D::~vtkOpenGLContextDevice2D()
 {
+  delete this->VBO;
+  this->VBO = 0;
+  delete this->VCBO;
+  this->VCBO = 0;
+  delete this->SBO;
+  this->SBO = 0;
+  delete this->SCBO;
+  this->SCBO = 0;
+  delete this->VTBO;
+  this->VTBO = 0;
+
   while (!this->MarkerCache.empty())
     {
     this->MarkerCache.back().Value->Delete();
@@ -74,7 +101,19 @@ vtkOpenGLContextDevice2D::~vtkOpenGLContextDevice2D()
     }
 
   this->TextRenderer->Delete();
+  this->ProjectionMatrix->Delete();
+  this->ModelMatrix->Delete();
   delete this->Storage;
+}
+
+vtkMatrix4x4 *vtkOpenGLContextDevice2D::GetProjectionMatrix()
+{
+  return this->ProjectionMatrix->GetMatrix();
+}
+
+vtkMatrix4x4 *vtkOpenGLContextDevice2D::GetModelMatrix()
+{
+  return this->ModelMatrix->GetMatrix();
 }
 
 //-----------------------------------------------------------------------------
@@ -91,39 +130,48 @@ void vtkOpenGLContextDevice2D::Begin(vtkViewport* viewport)
                          static_cast<int>(vp[3]));
 
   // push a 2D matrix on the stack
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
-  glLoadIdentity();
-  float offset = 0.5;
-  glOrtho(offset, vp[2]+offset-1.0,
-          offset, vp[3]+offset-1.0,
-          -2000, 2000);
+  this->ProjectionMatrix->Push();
+  this->ProjectionMatrix->Identity();
+  this->PushMatrix();
+  this->ModelMatrix->Identity();
 
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
-  glLoadIdentity();
+  double offset = 0.5;
+  double xmin = offset;
+  double xmax = vp[2]+offset-1.0;
+  double ymin = offset;
+  double ymax = vp[3]+offset-1.0;
+  double znear = -2000;
+  double zfar = 2000;
+
+  double matrix[4][4];
+  vtkMatrix4x4::Identity(*matrix);
+
+  matrix[0][0] = 2/(xmax - xmin);
+  matrix[1][1] = 2/(ymax - ymin);
+  matrix[2][2] = -2/(zfar - znear);
+
+  matrix[0][3] = -(xmin + xmax)/(xmax - xmin);
+  matrix[1][3] = -(ymin + ymax)/(ymax - ymin);
+  matrix[2][3] = -(znear + zfar)/(zfar - znear);
+
+  this->ProjectionMatrix->SetMatrix(*matrix);
 
   // Store the previous state before changing it
   this->Storage->SaveGLState();
-  glDisable(GL_LIGHTING);
   glDisable(GL_DEPTH_TEST);
   glEnable(GL_BLEND);
 
   this->Renderer = vtkRenderer::SafeDownCast(viewport);
 
-  vtkOpenGLRenderWindow *renWin = vtkOpenGLRenderWindow::SafeDownCast(this->Renderer->GetRenderWindow());
-  renWin->GetShaderCache()->ReleaseCurrentShader();
+  this->RenderWindow = vtkOpenGLRenderWindow::SafeDownCast(this->Renderer->GetRenderWindow());
+  this->RenderWindow->GetShaderCache()->ReleaseCurrentShader();
 
   // Enable simple line, point and polygon antialiasing if multisampling is on.
   if (this->Renderer->GetRenderWindow()->GetMultiSamples())
     {
     glEnable(GL_LINE_SMOOTH);
-    glEnable(GL_POINT_SMOOTH);
     glEnable(GL_POLYGON_SMOOTH);
     }
-
-  // Make sure we are on the default texture setting
-  glBindTexture(GL_TEXTURE_2D, 0);
 
   this->InRender = true;
   vtkOpenGLCheckErrorMacro("failed after Begin");
@@ -137,13 +185,10 @@ void vtkOpenGLContextDevice2D::End()
     return;
     }
 
-  vtkOpenGLClearErrorMacro();
+  this->ProjectionMatrix->Pop();
+  this->PopMatrix();
 
-  // push a 2D matrix on the stack
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
+  vtkOpenGLClearErrorMacro();
 
   // Restore the GL state that we changed
   this->Storage->RestoreGLState();
@@ -152,7 +197,6 @@ void vtkOpenGLContextDevice2D::End()
   if (this->Renderer->GetRenderWindow()->GetMultiSamples())
     {
     glDisable(GL_LINE_SMOOTH);
-    glDisable(GL_POINT_SMOOTH);
     glDisable(GL_POLYGON_SMOOTH);
     }
 
@@ -180,20 +224,35 @@ void vtkOpenGLContextDevice2D::BufferIdModeBegin(
   int usize, vsize;
   this->Renderer->GetTiledSizeAndOrigin(&usize,&vsize,lowerLeft,lowerLeft+1);
 
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
-  glLoadIdentity();
-  glOrtho( 0.5, usize+0.5,
-           0.5, vsize+0.5,
-          -1, 1);
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
-  glLoadIdentity();
+  // push a 2D matrix on the stack
+  this->ProjectionMatrix->Push();
+  this->ProjectionMatrix->Identity();
+  this->PushMatrix();
+  this->ModelMatrix->Identity();
+
+  double xmin = 0.5;
+  double xmax = usize+0.5;
+  double ymin = 0.5;
+  double ymax = vsize+0.5;
+  double znear = -1;
+  double zfar = 1;
+
+  double matrix[4][4];
+  vtkMatrix4x4::Identity(*matrix);
+
+  matrix[0][0] = 2/(xmax - xmin);
+  matrix[1][1] = 2/(ymax - ymin);
+  matrix[2][2] = -2/(zfar - znear);
+
+  matrix[0][3] = -(xmin + xmax)/(xmax - xmin);
+  matrix[1][3] = -(ymin + ymax)/(ymax - ymin);
+  matrix[2][3] = -(znear + zfar)/(zfar - znear);
+
+  this->ProjectionMatrix->SetMatrix(*matrix);
 
   glDrawBuffer(GL_BACK_LEFT);
   glClearColor(0.0,0.0,0.0,0.0); // id=0 means no hit, just background
   glClear(GL_COLOR_BUFFER_BIT);
-  glDisable(GL_LIGHTING);
   glDisable(GL_ALPHA_TEST);
   glDisable(GL_STENCIL_TEST);
   glDisable(GL_DEPTH_TEST);
@@ -217,12 +276,8 @@ void vtkOpenGLContextDevice2D::BufferIdModeEnd()
   this->Renderer->GetTiledSizeAndOrigin(&usize,&vsize,lowerLeft,lowerLeft+1);
   this->BufferId->SetValues(lowerLeft[0],lowerLeft[1]);
 
-  // Restore OpenGL state (only if it's different to avoid too much state
-  // change).
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
+  this->ProjectionMatrix->Pop();
+  this->PopMatrix();
 
   this->Storage->RestoreGLState(true);
 
@@ -233,6 +288,265 @@ void vtkOpenGLContextDevice2D::BufferIdModeEnd()
   assert("post: done" && !this->GetBufferIdMode());
 }
 
+
+void vtkOpenGLContextDevice2D::SetMatrices(vtkShaderProgram *prog)
+{
+  prog->SetUniformMatrix("WCDCMatrix",
+    this->ProjectionMatrix->GetMatrix());
+  prog->SetUniformMatrix("MCWCMatrix",
+    this->ModelMatrix->GetMatrix());
+}
+
+void vtkOpenGLContextDevice2D::BuildVBO(
+  vtkgl::CellBO *cellBO,
+  float *f, int nv,
+  unsigned char *colors, int nc,
+  float *tcoords)
+{
+  int stride = 2;
+  int cOffset = 0;
+  int tOffset = 0;
+  if (colors)
+    {
+    cOffset = stride;
+    stride++;
+    }
+  if (tcoords)
+    {
+    tOffset = stride;
+    stride += 2;
+    }
+
+  std::vector<float> va;
+  va.resize(nv*stride);
+  unsigned char c[4];
+  for (int i = 0; i < nv; i++)
+    {
+    va[i*stride] = f[i*2];
+    va[i*stride+1] = f[i*2+1];
+    if (colors)
+      {
+      c[0] = colors[nc*i];
+      c[1] = colors[nc*i+1];
+      c[2] = colors[nc*i+2];
+      if (nc == 4)
+        {
+        c[3] = colors[nc*i+3];
+        }
+      else
+        {
+        c[3] =  255;
+        }
+      va[i*stride+cOffset] = *reinterpret_cast<float *>(c);
+      }
+    if (tcoords)
+      {
+      va[i*stride+tOffset] = tcoords[i*2];
+      va[i*stride+tOffset+1] = tcoords[i*2+1];
+      }
+    }
+
+  // upload the data
+  cellBO->ibo.Upload(va, vtkgl::BufferObject::ArrayBuffer);
+  cellBO->vao.Bind();
+  if (!cellBO->vao.AddAttributeArray(
+        cellBO->Program, cellBO->ibo,
+        "vertexMC", 0,
+        sizeof(float)*stride,
+        VTK_FLOAT, 2, false))
+    {
+    vtkErrorMacro(<< "Error setting vertexMC in shader VAO.");
+    }
+  if (colors)
+    {
+    if (!cellBO->vao.AddAttributeArray(
+          cellBO->Program, cellBO->ibo,
+          "vertexScalar", sizeof(float)*cOffset,
+          sizeof(float)*stride,
+          VTK_UNSIGNED_CHAR, 4, true))
+      {
+      vtkErrorMacro(<< "Error setting vertexScalar in shader VAO.");
+      }
+    }
+  if (tcoords)
+    {
+    if (!cellBO->vao.AddAttributeArray(
+          cellBO->Program, cellBO->ibo,
+          "tcoordMC", sizeof(float)*tOffset,
+          sizeof(float)*stride,
+          VTK_FLOAT, 2, false))
+      {
+      vtkErrorMacro(<< "Error setting tcoordMC in shader VAO.");
+      }
+    }
+
+  cellBO->vao.Bind();
+}
+
+void vtkOpenGLContextDevice2D::ReadyVBOProgram()
+{
+  if (!this->VBO->Program)
+    {
+    this->VBO->Program  =
+        this->RenderWindow->GetShaderCache()->ReadyShader(
+        // vertex shader
+        "//VTK::System::Dec\n"
+        "attribute vec2 vertexMC;\n"
+        "uniform mat4 WCDCMatrix;\n"
+        "uniform mat4 MCWCMatrix;\n"
+        "void main() {\n"
+        "vec4 vertex = vec4(vertexMC.xy, 0.0, 1.0);\n"
+        "gl_Position = vertex*MCWCMatrix*WCDCMatrix; }\n",
+        // fragment shader
+        "//VTK::System::Dec\n"
+        "//VTK::Output::Dec\n"
+        "uniform vec4 vertexColor;\n"
+        "void main() { gl_FragData[0] = vertexColor; }",
+        // geometry shader
+        "");
+    }
+  else
+    {
+    this->RenderWindow->GetShaderCache()->ReadyShader(this->VBO->Program);
+    }
+}
+
+void vtkOpenGLContextDevice2D::ReadyVCBOProgram()
+{
+  if (!this->VCBO->Program)
+    {
+    this->VCBO->Program  =
+        this->RenderWindow->GetShaderCache()->ReadyShader(
+        // vertex shader
+        "//VTK::System::Dec\n"
+        "attribute vec2 vertexMC;\n"
+        "attribute vec4 vertexScalar;\n"
+        "uniform mat4 WCDCMatrix;\n"
+        "uniform mat4 MCWCMatrix;\n"
+        "varying vec4 vertexColor;\n"
+        "void main() {\n"
+        "vec4 vertex = vec4(vertexMC.xy, 0.0, 1.0);\n"
+        "vertexColor = vertexScalar;\n"
+        "gl_Position = vertex*MCWCMatrix*WCDCMatrix; }\n",
+        // fragment shader
+        "//VTK::System::Dec\n"
+        "//VTK::Output::Dec\n"
+        "varying vec4 vertexColor;\n"
+        "void main() { gl_FragData[0] = vertexColor; }",
+        // geometry shader
+        "");
+    }
+  else
+    {
+    this->RenderWindow->GetShaderCache()->ReadyShader(this->VCBO->Program);
+    }
+}
+
+void vtkOpenGLContextDevice2D::ReadyVTBOProgram()
+{
+  if (!this->VTBO->Program)
+    {
+    this->VTBO->Program  =
+        this->RenderWindow->GetShaderCache()->ReadyShader(
+        // vertex shader
+        "//VTK::System::Dec\n"
+        "attribute vec2 vertexMC;\n"
+        "attribute vec2 tcoordMC;\n"
+        "uniform mat4 WCDCMatrix;\n"
+        "uniform mat4 MCWCMatrix;\n"
+        "varying vec2 tcoord;\n"
+        "void main() {\n"
+        "vec4 vertex = vec4(vertexMC.xy, 0.0, 1.0);\n"
+        "tcoord = tcoordMC;\n"
+        "gl_Position = vertex*MCWCMatrix*WCDCMatrix; }\n",
+        // fragment shader
+        "//VTK::System::Dec\n"
+        "//VTK::Output::Dec\n"
+        "varying vec2 tcoord;\n"
+        "uniform sampler2D texture1;\n"
+        "void main() { gl_FragData[0] = texture2D(texture1, tcoord); }",
+        // geometry shader
+        "");
+    }
+  else
+    {
+    this->RenderWindow->GetShaderCache()->ReadyShader(this->VTBO->Program);
+    }
+}
+
+void vtkOpenGLContextDevice2D::ReadySBOProgram()
+{
+  if (!this->SBO->Program)
+    {
+    this->SBO->Program  =
+        this->RenderWindow->GetShaderCache()->ReadyShader(
+        // vertex shader
+        "//VTK::System::Dec\n"
+        "attribute vec2 vertexMC;\n"
+        "uniform mat4 WCDCMatrix;\n"
+        "uniform mat4 MCWCMatrix;\n"
+        "void main() {\n"
+        "vec4 vertex = vec4(vertexMC.xy, 0.0, 1.0);\n"
+        "gl_Position = vertex*MCWCMatrix*WCDCMatrix; }\n",
+        // fragment shader
+        "//VTK::System::Dec\n"
+        "//VTK::Output::Dec\n"
+        "uniform vec4 vertexColor;\n"
+        "uniform sampler2D texture1;\n"
+        "void main() { gl_FragData[0] = vertexColor*texture2D(texture1, gl_PointCoord); }",
+        // geometry shader
+        "");
+    }
+  else
+    {
+    this->RenderWindow->GetShaderCache()->ReadyShader(this->SBO->Program);
+    }
+}
+
+void vtkOpenGLContextDevice2D::ReadySCBOProgram()
+{
+  if (!this->SCBO->Program)
+    {
+    this->SCBO->Program  =
+        this->RenderWindow->GetShaderCache()->ReadyShader(
+        // vertex shader
+        "//VTK::System::Dec\n"
+        "attribute vec2 vertexMC;\n"
+        "attribute vec4 vertexScalar;\n"
+        "uniform mat4 WCDCMatrix;\n"
+        "uniform mat4 MCWCMatrix;\n"
+        "varying vec4 vertexColor;\n"
+        "void main() {\n"
+        "vec4 vertex = vec4(vertexMC.xy, 0.0, 1.0);\n"
+        "vertexColor = vertexScalar;\n"
+        "gl_Position = vertex*MCWCMatrix*WCDCMatrix; }\n",
+        // fragment shader
+        "//VTK::System::Dec\n"
+        "//VTK::Output::Dec\n"
+        "varying vec4 vertexColor;\n"
+        "uniform sampler2D texture1;\n"
+        "void main() { gl_FragData[0] = vertexColor*texture2D(texture1, gl_PointCoord); }",
+        // geometry shader
+        "");
+    }
+  else
+    {
+    this->RenderWindow->GetShaderCache()->ReadyShader(this->SCBO->Program);
+    }
+}
+
+namespace
+{
+  void copyColors(std::vector<unsigned char> &newColors,
+    unsigned char *colors, int nc)
+    {
+    for (int j = 0; j < nc; j++)
+      {
+      newColors.push_back(colors[j]);
+      }
+    }
+}
+
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::DrawPoly(float *f, int n, unsigned char *colors,
                                         int nc)
@@ -240,34 +554,184 @@ void vtkOpenGLContextDevice2D::DrawPoly(float *f, int n, unsigned char *colors,
   assert("f must be non-null" && f != NULL);
   assert("n must be greater than 0" && n > 0);
 
+  if (this->Pen->GetLineType() == vtkPen::NO_PEN)
+    {
+    return;
+    }
+
   vtkOpenGLClearErrorMacro();
-
   this->SetLineType(this->Pen->GetLineType());
-  this->SetLineWidth(this->Pen->GetWidth());
 
+  vtkgl::CellBO *cbo = 0;
   if (colors)
     {
-    glEnableClientState(GL_COLOR_ARRAY);
-    glColorPointer(nc, GL_UNSIGNED_BYTE, 0, colors);
+    this->ReadyVCBOProgram();
+    cbo = this->VCBO;
     }
   else
     {
-    glColor4ubv(this->Pen->GetColor());
-    }
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, f);
-  glDrawArrays(GL_LINE_STRIP, 0, n);
-  glDisableClientState(GL_VERTEX_ARRAY);
-  if (colors)
-    {
-    glDisableClientState(GL_COLOR_ARRAY);
+    this->ReadyVBOProgram();
+    cbo = this->VBO;
+    cbo->Program->SetUniform4uc("vertexColor",
+      this->Pen->GetColor());
     }
 
-  // Restore line type and width.
-  this->SetLineType(vtkPen::SOLID_LINE);
-  this->SetLineWidth(1.0f);
+  this->SetMatrices(cbo->Program);
+
+  if (this->Pen->GetWidth() > 1.0)
+    {
+    double *scale = this->ModelMatrix->GetScale();
+    // convert to triangles and draw, this is because
+    // OpenGL no longer supports wide lines directly
+    float hwidth = this->Pen->GetWidth()/2.0;
+    std::vector<float> newVerts;
+    std::vector<unsigned char> newColors;
+    for (int i = 0; i < n-1; i++)
+      {
+      // for each line segment draw two triangles
+      // start by computing the direction
+      vtkVector2f dir((f[i*2+2] - f[i*2])*scale[0],
+        (f[i*2+3] - f[i*2+1])*scale[1]);
+      vtkVector2f norm(-dir.GetY(),dir.GetX());
+      norm.Normalize();
+      norm.SetX(hwidth*norm.GetX()/scale[0]);
+      norm.SetY(hwidth*norm.GetY()/scale[1]);
+
+      newVerts.push_back(f[i*2]+norm.GetX());
+      newVerts.push_back(f[i*2+1]+norm.GetY());
+      newVerts.push_back(f[i*2]-norm.GetX());
+      newVerts.push_back(f[i*2+1]-norm.GetY());
+      newVerts.push_back(f[i*2+2]-norm.GetX());
+      newVerts.push_back(f[i*2+3]-norm.GetY());
+
+      newVerts.push_back(f[i*2]+norm.GetX());
+      newVerts.push_back(f[i*2+1]+norm.GetY());
+      newVerts.push_back(f[i*2+2]-norm.GetX());
+      newVerts.push_back(f[i*2+3]-norm.GetY());
+      newVerts.push_back(f[i*2+2]+norm.GetX());
+      newVerts.push_back(f[i*2+3]+norm.GetY());
+
+      if (colors)
+        {
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        }
+      }
+
+    this->BuildVBO(cbo, &(newVerts[0]), newVerts.size()/2,
+      colors ? &(newColors[0]) : NULL, nc, NULL);
+    glDrawArrays(GL_TRIANGLES, 0, newVerts.size()/2);
+    }
+  else
+    {
+    this->SetLineWidth(this->Pen->GetWidth());
+    this->BuildVBO(cbo, f, n, colors, nc, NULL);
+    glDrawArrays(GL_LINE_STRIP, 0, n);
+    this->SetLineWidth(1.0);
+    }
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
 
   vtkOpenGLCheckErrorMacro("failed after DrawPoly");
+}
+
+//-----------------------------------------------------------------------------
+void vtkOpenGLContextDevice2D::DrawLines(float *f, int n, unsigned char *colors,
+                                         int nc)
+{
+  assert("f must be non-null" && f != NULL);
+  assert("n must be greater than 0" && n > 0);
+
+  if (this->Pen->GetLineType() == vtkPen::NO_PEN)
+    {
+    return;
+    }
+
+  vtkOpenGLClearErrorMacro();
+
+  this->SetLineType(this->Pen->GetLineType());
+
+  vtkgl::CellBO *cbo = 0;
+  if (colors)
+    {
+    this->ReadyVCBOProgram();
+    cbo = this->VCBO;
+    }
+  else
+    {
+    this->ReadyVBOProgram();
+    cbo = this->VBO;
+    cbo->Program->SetUniform4uc("vertexColor",
+      this->Pen->GetColor());
+    }
+
+  this->SetMatrices(cbo->Program);
+
+  if (this->Pen->GetWidth() > 1.0)
+    {
+    double *scale = this->ModelMatrix->GetScale();
+    // convert to triangles and draw, this is because
+    // OpenGL no longer supports wide lines directly
+    float hwidth = this->Pen->GetWidth()/2.0;
+    std::vector<float> newVerts;
+    std::vector<unsigned char> newColors;
+    for (int i = 0; i < n-1; i += 2)
+      {
+      // for each line segment draw two triangles
+      // start by computing the direction
+      vtkVector2f dir((f[i*2+2] - f[i*2])*scale[0],
+        (f[i*2+3] - f[i*2+1])*scale[1]);
+      vtkVector2f norm(-dir.GetY(),dir.GetX());
+      norm.Normalize();
+      norm.SetX(hwidth*norm.GetX()/scale[0]);
+      norm.SetY(hwidth*norm.GetY()/scale[1]);
+
+      newVerts.push_back(f[i*2]+norm.GetX());
+      newVerts.push_back(f[i*2+1]+norm.GetY());
+      newVerts.push_back(f[i*2]-norm.GetX());
+      newVerts.push_back(f[i*2+1]-norm.GetY());
+      newVerts.push_back(f[i*2+2]-norm.GetX());
+      newVerts.push_back(f[i*2+3]-norm.GetY());
+
+      newVerts.push_back(f[i*2]+norm.GetX());
+      newVerts.push_back(f[i*2+1]+norm.GetY());
+      newVerts.push_back(f[i*2+2]-norm.GetX());
+      newVerts.push_back(f[i*2+3]-norm.GetY());
+      newVerts.push_back(f[i*2+2]+norm.GetX());
+      newVerts.push_back(f[i*2+3]+norm.GetY());
+
+      if (colors)
+        {
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        copyColors(newColors, colors+i*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        copyColors(newColors, colors+(i+1)*nc, nc);
+        }
+      }
+
+    this->BuildVBO(cbo, &(newVerts[0]), newVerts.size()/2,
+      colors ? &(newColors[0]) : NULL, nc, NULL);
+    glDrawArrays(GL_TRIANGLES, 0, newVerts.size()/2);
+    }
+  else
+    {
+    this->SetLineWidth(this->Pen->GetWidth());
+    this->BuildVBO(cbo, f, n, colors, nc, NULL);
+    glDrawArrays(GL_LINES, 0, n);
+    this->SetLineWidth(1.0);
+    }
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
+
+  vtkOpenGLCheckErrorMacro("failed after DrawLines");
 }
 
 //-----------------------------------------------------------------------------
@@ -276,31 +740,29 @@ void vtkOpenGLContextDevice2D::DrawPoints(float *f, int n, unsigned char *c,
 {
   vtkOpenGLClearErrorMacro();
 
-  if (f && n > 0)
+  vtkgl::CellBO *cbo = 0;
+  if (c)
     {
-    this->SetPointSize(this->Pen->GetWidth());
-    glEnableClientState(GL_VERTEX_ARRAY);
-    if (c && nc)
-      {
-      glEnableClientState(GL_COLOR_ARRAY);
-      glColorPointer(nc, GL_UNSIGNED_BYTE, 0, c);
-      }
-    else
-      {
-      glColor4ubv(this->Pen->GetColor());
-      }
-    glVertexPointer(2, GL_FLOAT, 0, f);
-    glDrawArrays(GL_POINTS, 0, n);
-    glDisableClientState(GL_VERTEX_ARRAY);
-    if (c && nc)
-      {
-      glDisableClientState(GL_COLOR_ARRAY);
-      }
+    this->ReadyVCBOProgram();
+    cbo = this->VCBO;
     }
   else
     {
-    vtkWarningMacro(<< "Points supplied that were not of type float.");
+    this->ReadyVBOProgram();
+    cbo = this->VBO;
+    cbo->Program->SetUniform4uc("vertexColor",
+      this->Pen->GetColor());
     }
+
+  this->SetPointSize(this->Pen->GetWidth());
+
+  this->BuildVBO(cbo, f, n, c, nc, NULL);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_POINTS, 0, n);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
 
   vtkOpenGLCheckErrorMacro("failed after DrawPoints");
 }
@@ -315,6 +777,24 @@ void vtkOpenGLContextDevice2D::DrawPointSprites(vtkImageData *sprite,
   if (points && n > 0)
     {
     this->SetPointSize(this->Pen->GetWidth());
+
+    vtkgl::CellBO *cbo = 0;
+    if (colors)
+      {
+      this->ReadySCBOProgram();
+      cbo = this->SCBO;
+      }
+    else
+      {
+      this->ReadySBOProgram();
+      cbo = this->SBO;
+      cbo->Program->SetUniform4uc("vertexColor",
+        this->Pen->GetColor());
+      }
+
+    this->BuildVBO(cbo, points, n, colors, nc_comps, NULL);
+    this->SetMatrices(cbo->Program);
+
     if (sprite)
       {
       if (!this->Storage->SpriteTexture)
@@ -325,72 +805,34 @@ void vtkOpenGLContextDevice2D::DrawPointSprites(vtkImageData *sprite,
       this->Storage->SpriteTexture->SetInputData(sprite);
       this->Storage->SpriteTexture->SetRepeat(properties & vtkContextDevice2D::Repeat);
       this->Storage->SpriteTexture->SetInterpolate(properties & vtkContextDevice2D::Linear);
-      glEnable(GL_TEXTURE_2D);
       this->Storage->SpriteTexture->Render(this->Renderer);
+      int tunit = vtkOpenGLTexture::SafeDownCast(
+        this->Storage->SpriteTexture)->GetTextureUnit();
+      cbo->Program->SetUniformi("texture1", tunit);
       }
 
-    // Must emulate the point sprites - slower but at least they see something.
-    GLfloat width = 1.0;
-    glGetFloatv(GL_POINT_SIZE, &width);
-    width /= 2.0;
-
-    // Need to get the model view matrix for scaling factors...
-    GLfloat mv[16];
-    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
-    float xWidth = width / mv[0];
-    float yWidth = width / mv[5];
-
-    // Four 2D points on the quad.
-    float p[4 * 2] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-
-    // This will be the same every time
-    float texCoord[] = { 0.0, 0.0,
-                         1.0, 0.0,
-                         1.0, 1.0,
-                         0.0, 1.0 };
-
-    if (!colors || !nc_comps)
+    // We can actually use point sprites here
+    if (!vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
       {
-      glColor4ubv(this->Pen->GetColor());
+      glEnable(GL_POINT_SPRITE);
+      glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
       }
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glTexCoordPointer(2, GL_FLOAT, 0, texCoord);
+    glPointParameteri(GL_POINT_SPRITE_COORD_ORIGIN, GL_LOWER_LEFT);
 
-    for (int i = 0; i < n; ++i)
+    glDrawArrays(GL_POINTS, 0, n);
+
+    // free everything
+    cbo->ReleaseGraphicsResources(this->RenderWindow);
+
+    if (!vtkOpenGLRenderWindow::GetContextSupportsOpenGL32())
       {
-      p[0] = points[2*i] - xWidth;
-      p[1] = points[2*i+1] - yWidth;
-      p[2] = points[2*i] + xWidth;
-      p[3] = points[2*i+1] - yWidth;
-      p[4] = points[2*i] + xWidth;
-      p[5] = points[2*i+1] + yWidth;
-      p[6] = points[2*i] - xWidth;
-      p[7] = points[2*i+1] + yWidth;
-
-      // If we have a color array, set the color for each quad.
-      if (colors && nc_comps)
-        {
-        if (nc_comps == 3)
-          {
-          glColor3ubv(&colors[3 * i]);
-          }
-        else if (nc_comps == 4)
-          {
-          glColor4ubv(&colors[4 * i]);
-          }
-        }
-
-      glVertexPointer(2, GL_FLOAT, 0, p);
-      glDrawArrays(GL_QUADS, 0, 4);
+      glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_FALSE);
+      glDisable(GL_POINT_SPRITE);
       }
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glDisableClientState(GL_VERTEX_ARRAY);
 
     if (sprite)
       {
       this->Storage->SpriteTexture->PostRender(this->Renderer);
-      glDisable(GL_TEXTURE_2D);
       }
     }
   else
@@ -414,33 +856,70 @@ void vtkOpenGLContextDevice2D::DrawMarkers(int shape, bool highlight,
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::DrawQuad(float *f, int n)
 {
-  vtkOpenGLClearErrorMacro();
   if (!f || n <= 0)
     {
     vtkWarningMacro(<< "Points supplied that were not of type float.");
     return;
     }
-  glColor4ubv(this->Brush->GetColor());
+
+  // convert quads to triangles
+  std::vector<float> tverts;
+  int numTVerts = 6*n/4;
+  tverts.resize(numTVerts*2);
+  int offset[6] = {0,1,2,0,2,3};
+  for (int i = 0; i < numTVerts; i++)
+    {
+    int index = 2*(4*(i/6)+offset[i%6]);
+    tverts[i*2] = f[index];
+    tverts[i*2+1] = f[index+1];
+    }
+
+  this->CoreDrawTriangles(tverts);
+}
+
+void vtkOpenGLContextDevice2D::CoreDrawTriangles(
+  std::vector<float> &tverts)
+{
+  vtkOpenGLClearErrorMacro();
+
   float* texCoord = 0;
+  vtkgl::CellBO *cbo = 0;
   if (this->Brush->GetTexture())
     {
+    this->ReadyVTBOProgram();
+    cbo = this->VTBO;
     this->SetTexture(this->Brush->GetTexture(),
                      this->Brush->GetTextureProperties());
-    glEnable(GL_TEXTURE_2D);
     this->Storage->Texture->Render(this->Renderer);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    texCoord = this->Storage->TexCoords(f, n);
-    glTexCoordPointer(2, GL_FLOAT, 0, &texCoord[0]);
+    texCoord = this->Storage->TexCoords(&(tverts[0]), tverts.size()/2);
+
+    int tunit = vtkOpenGLTexture::SafeDownCast(this->Storage->Texture)->GetTextureUnit();
+    cbo->Program->SetUniformi("texture1", tunit);
+    cerr << "have tcoords\n";
+    if (this->Storage->Texture->GetTransform())
+      {
+        cerr << "have a transform\n";
+      }
     }
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, f);
-  glDrawArrays(GL_QUADS, 0, n);
-  glDisableClientState(GL_VERTEX_ARRAY);
+  else
+    {
+    this->ReadyVBOProgram();
+    cbo = this->VBO;
+    }
+  cbo->Program->SetUniform4uc("vertexColor",
+      this->Brush->GetColor());
+
+  this->BuildVBO(cbo, &(tverts[0]), tverts.size()/2, NULL, 0, texCoord);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_TRIANGLES, 0, tverts.size()/2);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
+
   if (this->Storage->Texture)
     {
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     this->Storage->Texture->PostRender(this->Renderer);
-    glDisable(GL_TEXTURE_2D);
     delete [] texCoord;
     }
   vtkOpenGLCheckErrorMacro("failed after DrawQuad");
@@ -449,70 +928,51 @@ void vtkOpenGLContextDevice2D::DrawQuad(float *f, int n)
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::DrawQuadStrip(float *f, int n)
 {
-  vtkOpenGLClearErrorMacro();
   if (!f || n <= 0)
     {
     vtkWarningMacro(<< "Points supplied that were not of type float.");
     return;
     }
-  glColor4ubv(this->Brush->GetColor());
-  float* texCoord = 0;
-  if (this->Brush->GetTexture())
+
+  // convert quad strips to triangles
+  std::vector<float> tverts;
+  int numTVerts = 3*(n-2);
+  tverts.resize(numTVerts*2);
+  int offset[6] = {0,1,3,0,3,2};
+  for (int i = 0; i < numTVerts; i++)
     {
-    this->SetTexture(this->Brush->GetTexture(),
-                     this->Brush->GetTextureProperties());
-    glEnable(GL_TEXTURE_2D);
-    this->Storage->Texture->Render(this->Renderer);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    texCoord = this->Storage->TexCoords(f, n);
-    glTexCoordPointer(2, GL_FLOAT, 0, &texCoord[0]);
+    int index = 2*(2*(i/6)+offset[i%6]);
+    tverts[i*2] = f[index];
+    tverts[i*2+1] = f[index+1];
     }
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, f);
-  glDrawArrays(GL_QUAD_STRIP, 0, n);
-  glDisableClientState(GL_VERTEX_ARRAY);
-  if (this->Storage->Texture)
-    {
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    this->Storage->Texture->PostRender(this->Renderer);
-    glDisable(GL_TEXTURE_2D);
-    delete [] texCoord;
-    }
-  vtkOpenGLCheckErrorMacro("failed after DrawQuadStrip");
+
+  this->CoreDrawTriangles(tverts);
 }
+
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::DrawPolygon(float *f, int n)
 {
-  vtkOpenGLClearErrorMacro();
   if (!f || n <= 0)
     {
     vtkWarningMacro(<< "Points supplied that were not of type float.");
     return;
     }
-  glColor4ubv(this->Brush->GetColor());
-  float* texCoord = 0;
-  if (this->Brush->GetTexture())
+
+  // convert polygon to triangles
+  std::vector<float> tverts;
+  int numTVerts = 3*(n-2);
+  tverts.resize(numTVerts*2);
+  for (int i = 0; i < n-2; i++)
     {
-    this->SetTexture(this->Brush->GetTexture(),
-                     this->Brush->GetTextureProperties());
-    glEnable(GL_TEXTURE_2D);
-    this->Storage->Texture->Render(this->Renderer);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    texCoord = this->Storage->TexCoords(f, n);
-    glTexCoordPointer(2, GL_FLOAT, 0, &texCoord[0]);
+    tverts.push_back(f[0]);
+    tverts.push_back(f[1]);
+    tverts.push_back(f[i*2+2]);
+    tverts.push_back(f[i*2+3]);
+    tverts.push_back(f[i*2+4]);
+    tverts.push_back(f[i*2+5]);
     }
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, f);
-  glDrawArrays(GL_POLYGON, 0, n);
-  glDisableClientState(GL_VERTEX_ARRAY);
-  if (this->Storage->Texture)
-    {
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    this->Storage->Texture->PostRender(this->Renderer);
-    glDisable(GL_TEXTURE_2D);
-    delete [] texCoord;
-    }
-  vtkOpenGLCheckErrorMacro("failed after DrawPolygon");
+
+  this->CoreDrawTriangles(tverts);
 }
 
 //-----------------------------------------------------------------------------
@@ -535,12 +995,8 @@ void vtkOpenGLContextDevice2D::DrawEllipseWedge(float x, float y, float outRx,
     return;
     }
 
-  vtkOpenGLClearErrorMacro();
-
   int iterations=this->GetNumberOfArcIterations(outRx,outRy,startAngle,
                                                 stopAngle);
-
-  float *p=new float[4*(iterations+1)];
 
   // step in radians.
   double step =
@@ -557,30 +1013,22 @@ void vtkOpenGLContextDevice2D::DrawEllipseWedge(float x, float y, float outRx,
   // OpenGL spec)
   // we are iterating counterclockwise
 
-  int i=0;
-  while(i<=iterations)
+  // convert polygon to triangles
+  std::vector<float> tverts;
+  int numTVerts = 6*iterations;
+  tverts.resize(numTVerts*2);
+  int offset[6] = {0,1,3,0,3,2};
+  for (int i = 0; i < numTVerts; i++)
     {
-    // A vertex (inner side)
-    double a=rstart+i*step;
-    p[4*i  ] = inRx * cos(a) + x;
-    p[4*i+1] = inRy * sin(a) + y;
-
-    // B vertex (outer side)
-    p[4*i+2] = outRx * cos(a) + x;
-    p[4*i+3] = outRy * sin(a) + y;
-
-    ++i;
+    int index = i/6 + offset[i%6]/2;
+    double radiusX = offset[i%6]%2 ? outRx : inRx;
+    double radiusY = offset[i%6]%2 ? outRy : inRy;
+    double a=rstart+index*step;
+    tverts.push_back(radiusX * cos(a) + x);
+    tverts.push_back(radiusY * sin(a) + y);
     }
 
-  glColor4ubv(this->Brush->GetColor());
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, p);
-  glDrawArrays(GL_TRIANGLE_STRIP, 0, 2*(iterations+1));
-  glDisableClientState(GL_VERTEX_ARRAY);
-
-  delete[] p;
-
-  vtkOpenGLCheckErrorMacro("failed after DrawEllipseWedge");
+  this->CoreDrawTriangles(tverts);
 }
 
 // ----------------------------------------------------------------------------
@@ -619,19 +1067,8 @@ void vtkOpenGLContextDevice2D::DrawEllipticArc(float x, float y, float rX,
     p[2*i+1] = rY * sin(a) + y;
     }
 
-  this->SetLineType(this->Pen->GetLineType());
-  this->SetLineWidth(this->Pen->GetWidth());
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, p);
-  glColor4ubv(this->Brush->GetColor());
-  glDrawArrays(GL_TRIANGLE_FAN, 0, iterations+1);
-  glColor4ubv(this->Pen->GetColor());
-  glDrawArrays(GL_LINE_STRIP, 0, iterations+1);
-  glDisableClientState(GL_VERTEX_ARRAY);
-  // Restore line type and width.
-  this->SetLineType(vtkPen::SOLID_LINE);
-  this->SetLineWidth(1.0f);
-
+  this->DrawPolygon(p,iterations+1);
+  this->DrawPoly(p,iterations+1);
   delete[] p;
 
   vtkOpenGLCheckErrorMacro("failed after DrawEllipseArc");
@@ -804,8 +1241,7 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
 {
   vtkOpenGLClearErrorMacro();
 
-  GLfloat mv[16];
-  glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+  double *mv = this->ModelMatrix->GetMatrix()->Element[0];
   float xScale = mv[0];
   float yScale = mv[5];
 
@@ -820,7 +1256,8 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
   if (image->GetNumberOfPoints() == 0 && image->GetNumberOfCells() == 0)
     {
     int textDims[2];
-    if (!this->TextRenderer->RenderString(this->TextProp, string, image,
+    if (!this->TextRenderer->RenderString(this->TextProp, string,
+                                          this->RenderWindow->GetDPI(), image,
                                           textDims))
       {
       return;
@@ -829,7 +1266,6 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
     cache.TextHeight = textDims[1];
     }
   vtkTexture* texture = cache.Texture;
-  glEnable(GL_TEXTURE_2D);
   texture->Render(this->Renderer);
 
   int imgDims[3];
@@ -846,24 +1282,34 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
   float points[] = { p[0]        , p[1],
                      p[0] + width, p[1],
                      p[0] + width, p[1] + height,
+                     p[0]        , p[1],
+                     p[0] + width, p[1] + height,
                      p[0]        , p[1] + height };
 
   float texCoord[] = { 0.0f, 0.0f,
                        xw,   0.0f,
                        xw,   xh,
+                       0.0f,   0.0f,
+                       xw,   xh,
                        0.0f, xh };
 
-  glColor4ub(255, 255, 255, 255);
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, points);
-  glTexCoordPointer(2, GL_FLOAT, 0, texCoord);
-  glDrawArrays(GL_QUADS, 0, 4);
-  glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-  glDisableClientState(GL_VERTEX_ARRAY);
+  vtkOpenGLClearErrorMacro();
+
+  vtkgl::CellBO *cbo = 0;
+  this->ReadyVTBOProgram();
+  cbo = this->VTBO;
+  int tunit = vtkOpenGLTexture::SafeDownCast(texture)->GetTextureUnit();
+  cbo->Program->SetUniformi("texture1", tunit);
+
+  this->BuildVBO(cbo, points, 6, NULL, 0, texCoord);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
 
   texture->PostRender(this->Renderer);
-  glDisable(GL_TEXTURE_2D);
 
   vtkOpenGLCheckErrorMacro("failed after DrawString");
 }
@@ -872,7 +1318,8 @@ void vtkOpenGLContextDevice2D::DrawString(float *point,
 void vtkOpenGLContextDevice2D::ComputeStringBounds(const vtkUnicodeString &string,
                                                    float bounds[4])
 {
-  vtkVector2i box = this->TextRenderer->GetBounds(this->TextProp, string);
+  vtkVector2i box = this->TextRenderer->GetBounds(this->TextProp, string,
+                                                  this->RenderWindow->GetDPI());
   // Check for invalid bounding box
   if (box[0] == VTK_INT_MIN || box[0] == VTK_INT_MAX ||
       box[1] == VTK_INT_MIN || box[1] == VTK_INT_MAX)
@@ -883,8 +1330,7 @@ void vtkOpenGLContextDevice2D::ComputeStringBounds(const vtkUnicodeString &strin
     bounds[3] = static_cast<float>(0);
     return;
     }
-  GLfloat mv[16];
-  glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+  double *mv = this->ModelMatrix->GetMatrix()->Element[0];
   float xScale = mv[0];
   float yScale = mv[5];
   bounds[0] = static_cast<float>(0);
@@ -928,11 +1374,9 @@ void vtkOpenGLContextDevice2D::DrawMathTextString(float point[2],
     }
 
   vtkTexture* texture = cache.Texture;
-  glEnable(GL_TEXTURE_2D);
   texture->Render(this->Renderer);
 
-  GLfloat mv[16];
-  glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+  double *mv = this->ModelMatrix->GetMatrix()->Element[0];
   float xScale = mv[0];
   float yScale = mv[5];
 
@@ -950,24 +1394,34 @@ void vtkOpenGLContextDevice2D::DrawMathTextString(float point[2],
   float points[] = { p[0]        , p[1],
                      p[0] + width, p[1],
                      p[0] + width, p[1] + height,
+                     p[0]        , p[1],
+                     p[0] + width, p[1] + height,
                      p[0]        , p[1] + height };
 
   float texCoord[] = { 0.0f, 0.0f,
                        xw,   0.0f,
                        xw,   xh,
+                       0.0f,   0.0f,
+                       xw,   xh,
                        0.0f, xh };
 
-  glColor4ub(255, 255, 255, 255);
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, points);
-  glTexCoordPointer(2, GL_FLOAT, 0, texCoord);
-  glDrawArrays(GL_QUADS, 0, 4);
-  glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-  glDisableClientState(GL_VERTEX_ARRAY);
+  vtkOpenGLClearErrorMacro();
+
+  vtkgl::CellBO *cbo = 0;
+  this->ReadyVTBOProgram();
+  cbo = this->VTBO;
+  int tunit = vtkOpenGLTexture::SafeDownCast(texture)->GetTextureUnit();
+  cbo->Program->SetUniformi("texture1", tunit);
+
+  this->BuildVBO(cbo, points, 6, NULL, 0, texCoord);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
 
   texture->PostRender(this->Renderer);
-  glDisable(GL_TEXTURE_2D);
 
   vtkOpenGLCheckErrorMacro("failed after DrawMathTexString");
 }
@@ -979,30 +1433,46 @@ void vtkOpenGLContextDevice2D::DrawImage(float p[2], float scale,
   vtkOpenGLClearErrorMacro();
 
   this->SetTexture(image);
-  glEnable(GL_TEXTURE_2D);
   this->Storage->Texture->Render(this->Renderer);
   int *extent = image->GetExtent();
   float points[] = { p[0]                     , p[1],
                      p[0]+scale*extent[1]+1.0f, p[1],
                      p[0]+scale*extent[1]+1.0f, p[1]+scale*extent[3]+1.0f,
+                     p[0]                     , p[1],
+                     p[0]+scale*extent[1]+1.0f, p[1]+scale*extent[3]+1.0f,
                      p[0]                     , p[1]+scale*extent[3]+1.0f };
 
-  float texCoord[] = { 0.0f, 0.0f,
-                       1.0f, 0.0f,
-                       1.0f, 1.0f,
-                       0.0f, 1.0f };
+  float texCoord[] = { 0.0f,   0.0f,
+                       1.0f,   0.0f,
+                       1.0f,   1.0f,
+                       0.0f,   0.0f,
+                       1.0f,   1.0f,
+                       0.0f,   1.0f };
 
-  glColor4ub(255, 255, 255, 255);
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, &points[0]);
-  glTexCoordPointer(2, GL_FLOAT, 0, &texCoord[0]);
-  glDrawArrays(GL_QUADS, 0, 4);
-  glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-  glDisableClientState(GL_VERTEX_ARRAY);
+  vtkOpenGLClearErrorMacro();
+
+  vtkgl::CellBO *cbo = 0;
+  this->ReadyVTBOProgram();
+  cbo = this->VTBO;
+  int tunit = vtkOpenGLTexture::SafeDownCast(
+    this->Storage->Texture)->GetTextureUnit();
+  cbo->Program->SetUniformi("texture1", tunit);
+
+    cerr << "doing image\n";
+    if (this->Storage->Texture->GetTransform())
+      {
+        cerr << "have a transform\n";
+      }
+
+  this->BuildVBO(cbo, points, 6, NULL, 0, texCoord);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
 
   this->Storage->Texture->PostRender(this->Renderer);
-  glDisable(GL_TEXTURE_2D);
 
   vtkOpenGLCheckErrorMacro("failed after DrawImage");
 }
@@ -1011,10 +1481,7 @@ void vtkOpenGLContextDevice2D::DrawImage(float p[2], float scale,
 void vtkOpenGLContextDevice2D::DrawImage(const vtkRectf& pos,
                                          vtkImageData *image)
 {
-  vtkOpenGLClearErrorMacro();
-
   vtkVector2f tex(1.0, 1.0);
-  glEnable(GL_TEXTURE_2D);
   GLuint index = 0;
   if (this->Storage->PowerOfTwoTextures)
     {
@@ -1024,44 +1491,62 @@ void vtkOpenGLContextDevice2D::DrawImage(const vtkRectf& pos,
     {
     index = this->Storage->TextureFromImage(image, tex);
     }
-//  this->SetTexture(image);
-//  this->Storage->Texture->Render(this->Renderer);
-  float points[] = { pos.GetX()              , pos.GetY(),
-                     pos.GetX() + pos.GetWidth(), pos.GetY(),
-                     pos.GetX() + pos.GetWidth(), pos.GetY() + pos.GetHeight(),
-                     pos.GetX()              , pos.GetY() + pos.GetHeight() };
 
-  float texCoord[] = { 0.0   , 0.0,
-                       tex[0], 0.0,
+  float points[] = {
+    pos.GetX()                 , pos.GetY(),
+    pos.GetX() + pos.GetWidth(), pos.GetY(),
+    pos.GetX() + pos.GetWidth(), pos.GetY() + pos.GetHeight(),
+    pos.GetX()                 , pos.GetY(),
+    pos.GetX() + pos.GetWidth(), pos.GetY() + pos.GetHeight(),
+    pos.GetX()                 , pos.GetY() + pos.GetHeight() };
+
+  float texCoord[] = { 0.0f,   0.0f,
+                       tex[0], 0.0f,
                        tex[0], tex[1],
-                       0.0   , tex[1] };
+                       0.0f,   0.0f,
+                       tex[0], tex[1],
+                       0.0f,   tex[1]};
 
-  glColor4ub(255, 255, 255, 255);
-  glEnableClientState(GL_VERTEX_ARRAY);
-  glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-  glVertexPointer(2, GL_FLOAT, 0, &points[0]);
-  glTexCoordPointer(2, GL_FLOAT, 0, &texCoord[0]);
-  glDrawArrays(GL_QUADS, 0, 4);
-  glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-  glDisableClientState(GL_VERTEX_ARRAY);
 
-//  this->Storage->Texture->PostRender(this->Renderer);
-  glDisable(GL_TEXTURE_2D);
+  vtkgl::CellBO *cbo = 0;
+  this->ReadyVTBOProgram();
+  cbo = this->VTBO;
+  int tunit =  this->RenderWindow->GetTextureUnitManager()->Allocate();
+  if (tunit < 0)
+    {
+    vtkErrorMacro("Hardware does not support the number of textures defined.");
+    return;
+    }
+  glActiveTexture(GL_TEXTURE0 + tunit);
+
+  cbo->Program->SetUniformi("texture1", tunit);
+
+  this->BuildVBO(cbo, points, 6, NULL, 0, texCoord);
+  this->SetMatrices(cbo->Program);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  this->RenderWindow->GetTextureUnitManager()->Free(tunit);
+
+  // free everything
+  cbo->ReleaseGraphicsResources(this->RenderWindow);
+
   glDeleteTextures(1, &index);
 
   vtkOpenGLCheckErrorMacro("failed after DrawImage");
+
 }
 
 //-----------------------------------------------------------------------------
-void vtkOpenGLContextDevice2D::SetColor4(unsigned char *color)
+void vtkOpenGLContextDevice2D::SetColor4(unsigned char *)
 {
-  glColor4ubv(color);
+  vtkErrorMacro("color cannot be set this way\n");
 }
 
 //-----------------------------------------------------------------------------
-void vtkOpenGLContextDevice2D::SetColor(unsigned char *color)
+void vtkOpenGLContextDevice2D::SetColor(unsigned char *)
 {
-  glColor3ubv(color);
+  vtkErrorMacro("color cannot be set this way\n");
 }
 
 //-----------------------------------------------------------------------------
@@ -1102,36 +1587,11 @@ void vtkOpenGLContextDevice2D::SetLineWidth(float width)
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::SetLineType(int type)
 {
-  if (type == vtkPen::SOLID_LINE)
+  if (type == vtkPen::SOLID_LINE || type == vtkPen::NO_PEN)
     {
-    glDisable(GL_LINE_STIPPLE);
+    return;
     }
-  else
-    {
-    glEnable(GL_LINE_STIPPLE);
-    }
-  GLushort pattern = 0x0000;
-  switch (type)
-    {
-    case vtkPen::NO_PEN:
-      pattern = 0x0000;
-      break;
-    case vtkPen::DASH_LINE:
-      pattern = 0x00FF;
-      break;
-    case vtkPen::DOT_LINE:
-      pattern = 0x0101;
-      break;
-    case vtkPen::DASH_DOT_LINE:
-      pattern = 0x0C0F;
-      break;
-    case vtkPen::DASH_DOT_DOT_LINE:
-      pattern = 0x1C47;
-      break;
-    default:
-      pattern = 0x0000;
-    }
-  glLineStipple(1, pattern);
+  vtkWarningMacro(<< "Line Stipples are no longer supported");
 }
 
 //-----------------------------------------------------------------------------
@@ -1141,28 +1601,24 @@ void vtkOpenGLContextDevice2D::MultiplyMatrix(vtkMatrix3x3 *m)
   double *M = m->GetData();
   double matrix[16];
 
-  // Convert from row major (C++ two dimensional arrays) to OpenGL
   matrix[0] = M[0];
-  matrix[1] = M[3];
+  matrix[1] = M[1];
   matrix[2] = 0.0;
-  matrix[3] = M[6];
-
-  matrix[4] = M[1];
+  matrix[3] = M[2];
+  matrix[4] = M[3];
   matrix[5] = M[4];
   matrix[6] = 0.0;
-  matrix[7] = M[7];
-
+  matrix[7] = M[5];
   matrix[8] = 0.0;
   matrix[9] = 0.0;
   matrix[10] = 1.0;
   matrix[11] = 0.0;
-
-  matrix[12] = M[2];
-  matrix[13] = M[5];
+  matrix[12] = M[6];
+  matrix[13] = M[7];
   matrix[14] = 0.0;
   matrix[15] = M[8];
 
-  glMultMatrixd(matrix);
+  this->ModelMatrix->Concatenate(matrix);
 }
 
 //-----------------------------------------------------------------------------
@@ -1172,28 +1628,24 @@ void vtkOpenGLContextDevice2D::SetMatrix(vtkMatrix3x3 *m)
   double *M = m->GetData();
   double matrix[16];
 
-  // Convert from row major (C++ two dimensional arrays) to OpenGL
   matrix[0] = M[0];
-  matrix[1] = M[3];
+  matrix[1] = M[1];
   matrix[2] = 0.0;
-  matrix[3] = M[6];
-
-  matrix[4] = M[1];
+  matrix[3] = M[2];
+  matrix[4] = M[3];
   matrix[5] = M[4];
   matrix[6] = 0.0;
-  matrix[7] = M[7];
-
+  matrix[7] = M[5];
   matrix[8] = 0.0;
   matrix[9] = 0.0;
   matrix[10] = 1.0;
   matrix[11] = 0.0;
-
-  matrix[12] = M[2];
-  matrix[13] = M[5];
+  matrix[12] = M[6];
+  matrix[13] = M[7];
   matrix[14] = 0.0;
   matrix[15] = M[8];
 
-  glLoadMatrixd(matrix);
+  this->ModelMatrix->SetMatrix(matrix);
 }
 
 //-----------------------------------------------------------------------------
@@ -1202,18 +1654,16 @@ void vtkOpenGLContextDevice2D::GetMatrix(vtkMatrix3x3 *m)
   assert("pre: non_null" && m != NULL);
   // We must construct a 4x4 matrix from the 3x3 matrix for OpenGL
   double *M = m->GetData();
-  double matrix[16];
-  glGetDoublev(GL_MODELVIEW_MATRIX, matrix);
+  double *matrix = this->ModelMatrix->GetMatrix()->Element[0];
 
-  // Convert from row major (C++ two dimensional arrays) to OpenGL
   M[0] = matrix[0];
-  M[1] = matrix[4];
-  M[2] = matrix[12];
-  M[3] = matrix[1];
+  M[1] = matrix[1];
+  M[2] = matrix[3];
+  M[3] = matrix[4];
   M[4] = matrix[5];
-  M[5] = matrix[13];
-  M[6] = matrix[3];
-  M[7] = matrix[7];
+  M[5] = matrix[7];
+  M[6] = matrix[12];
+  M[7] = matrix[13];
   M[8] = matrix[15];
 
   m->Modified();
@@ -1222,19 +1672,13 @@ void vtkOpenGLContextDevice2D::GetMatrix(vtkMatrix3x3 *m)
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::PushMatrix()
 {
-  vtkOpenGLClearErrorMacro();
-  glMatrixMode( GL_MODELVIEW );
-  glPushMatrix();
-  vtkOpenGLCheckErrorMacro("failed after PushMatrix");
+  this->ModelMatrix->Push();
 }
 
 //-----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::PopMatrix()
 {
-  vtkOpenGLClearErrorMacro();
-  glMatrixMode( GL_MODELVIEW );
-  glPopMatrix();
-  vtkOpenGLCheckErrorMacro("failed after PopMatrix");
+  this->ModelMatrix->Pop();
 }
 
 //-----------------------------------------------------------------------------
@@ -1294,6 +1738,11 @@ bool vtkOpenGLContextDevice2D::SetStringRendererToQt()
 //----------------------------------------------------------------------------
 void vtkOpenGLContextDevice2D::ReleaseGraphicsResources(vtkWindow *window)
 {
+  this->VBO->ReleaseGraphicsResources(window);
+  this->VCBO->ReleaseGraphicsResources(window);
+  this->SBO->ReleaseGraphicsResources(window);
+  this->SCBO->ReleaseGraphicsResources(window);
+  this->VTBO->ReleaseGraphicsResources(window);
   if (this->Storage->Texture)
     {
     this->Storage->Texture->ReleaseGraphicsResources(window);
@@ -1488,20 +1937,20 @@ void vtkOpenGLContextDevice2D::PrintSelf(ostream &os, vtkIndent indent)
   this->Superclass::PrintSelf(os, indent);
   os << indent << "Renderer: ";
   if (this->Renderer)
-  {
+    {
     os << endl;
     this->Renderer->PrintSelf(os, indent.GetNextIndent());
-  }
+    }
   else
     {
     os << "(none)" << endl;
     }
   os << indent << "Text Renderer: ";
-  if (this->Renderer)
-  {
+  if (this->TextRenderer)
+    {
     os << endl;
     this->TextRenderer->PrintSelf(os, indent.GetNextIndent());
-  }
+    }
   else
     {
     os << "(none)" << endl;

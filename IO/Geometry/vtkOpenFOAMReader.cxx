@@ -504,9 +504,16 @@ protected:
       case IDENTIFIER:
         this->String = new vtkStdString(*value.String);
         break;
-        // required to suppress the 'enumeration value not handled' warning by
-        // g++ when compiled with -Wall
-      default:
+      case UNDEFINED:
+      case STRINGLIST:
+      case LABELLIST:
+      case SCALARLIST:
+      case VECTORLIST:
+      case LABELLISTLIST:
+      case ENTRYVALUELIST:
+      case EMPTYLIST:
+      case DICTIONARY:
+      case TOKEN_ERROR:
         break;
       }
   }
@@ -653,9 +660,15 @@ public:
       case IDENTIFIER:
         str << *value.String;
         break;
-        // required to suppress the 'enumeration value not handled' warning by
-        // g++ when compiled with -Wall
-      default:
+      case UNDEFINED:
+      case STRINGLIST:
+      case LABELLIST:
+      case SCALARLIST:
+      case VECTORLIST:
+      case LABELLISTLIST:
+      case ENTRYVALUELIST:
+      case EMPTYLIST:
+      case DICTIONARY:
         break;
       }
     return str;
@@ -1067,7 +1080,7 @@ public:
             isExpanded = true;
             break;
             }
-          // fall through
+          VTK_FALLTHROUGH;
         default:
           wasPathSeparator = (c == '/' || c == '\\');
           expandedPath += c;
@@ -1162,7 +1175,7 @@ public:
           this->PutBack(c);
           return true;
           }
-        // fall through
+        VTK_FALLTHROUGH;
       case '.':
         // scalar token
         if (c == '.' && charI < MAXLEN)
@@ -2133,21 +2146,22 @@ public:
     {
       if (isPositions) // lagrangian/positions (class Cloud)
         {
+        // skip label celli, label facei and scalar stepFraction
+        const size_t sz1 = sizeof(double) * (nComponents + 1) + 2 * sizeof(int);
+
+        // skip label celli
+        const size_t sz2 = sizeof(double) * nComponents + sizeof(int);
+
         // allocate space along with the larger 1.4 format since the
         // size must be determined at compile-time. we allocate on the
         // stack to avoid leak when an exception is thrown.
-        unsigned char buffer[sizeof(double) * (nComponents + 1) + 2
-            * sizeof(int)];
-        const int nBytes = (io.GetIs13Positions()
-        // skip label celli
-            ? sizeof(double) * nComponents + sizeof(int)
-            // skip label celli, label facei and scalar stepFraction
-                : sizeof(double) * (nComponents + 1) + 2 * sizeof(int));
+        double buffer[sz1/sizeof(double)];
+        const int nBytes = (io.GetIs13Positions() ? sz2 : sz1);
         for (int i = 0; i < size; i++)
           {
           io.ReadExpecting('(');
-          io.Read(buffer, nBytes);
-          this->Ptr->SetTuple(i, reinterpret_cast<double *>(buffer));
+          io.Read(reinterpret_cast<unsigned char *>(buffer), nBytes);
+          this->Ptr->SetTuple(i, buffer);
           io.ReadExpecting(')');
           }
         }
@@ -3056,17 +3070,22 @@ vtkFoamEntryValue::vtkFoamEntryValue(
   switch (this->Superclass::Type)
     {
     case VECTORLIST:
+      {
+      vtkFloatArray *fa = vtkFloatArray::SafeDownCast(value.ToVTKObject());
+      if(fa->GetNumberOfComponents() == 6)
         {
-        vtkFloatArray *fa = vtkFloatArray::SafeDownCast(value.ToVTKObject());
-        if(fa->GetNumberOfComponents() == 6)
-          {
-          // create deepcopies for vtkObjects to avoid duplicated mainpulation
-          vtkFloatArray *newfa = vtkFloatArray::New();
-          newfa->DeepCopy(fa);
-          this->Superclass::VtkObjectPtr = newfa;
-          break;
-          }
+        // create deepcopies for vtkObjects to avoid duplicated mainpulation
+        vtkFloatArray *newfa = vtkFloatArray::New();
+        newfa->DeepCopy(fa);
+        this->Superclass::VtkObjectPtr = newfa;
         }
+      else
+        {
+        this->Superclass::VtkObjectPtr = value.ToVTKObject();
+        this->Superclass::VtkObjectPtr->Register(0);
+        }
+      }
+      break;
     case LABELLIST:
     case SCALARLIST:
     case STRINGLIST:
@@ -3101,8 +3120,13 @@ vtkFoamEntryValue::vtkFoamEntryValue(
       break;
     case EMPTYLIST:
       break;
-      // required to suppress the 'enumeration value not handled' warning by
-      // g++ when compiled with -Wall
+    case UNDEFINED:
+    case PUNCTUATION:
+    case LABEL:
+    case SCALAR:
+    case STRING:
+    case IDENTIFIER:
+    case TOKEN_ERROR:
     default:
       break;
     }
@@ -3133,8 +3157,14 @@ void vtkFoamEntryValue::Clear()
       case DICTIONARY:
         delete this->DictPtr;
         break;
-        // required to suppress the 'enumeration value not handled' warning by
-        // g++ when compiled with -Wall
+      case UNDEFINED:
+      case PUNCTUATION:
+      case LABEL:
+      case SCALAR:
+      case STRING:
+      case IDENTIFIER:
+      case TOKEN_ERROR:
+      case EMPTYLIST:
       default:
         break;
       }

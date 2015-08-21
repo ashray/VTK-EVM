@@ -99,10 +99,7 @@ vtkCompositeZPass::~vtkCompositeZPass()
 #endif
      this->Program = 0;
      }
-   if(this->RawZBuffer!=0)
-     {
-     delete[] this->RawZBuffer;
-     }
+   delete[] this->RawZBuffer;
 }
 
 // ----------------------------------------------------------------------------
@@ -228,7 +225,7 @@ void vtkCompositeZPass::Render(const vtkRenderState *s)
   continuousInc[2]=0;
 
 
-  if(this->RawZBuffer!=0 && this->RawZBufferSize<static_cast<size_t>(w*h))
+  if(this->RawZBufferSize<static_cast<size_t>(w*h))
     {
     delete[] this->RawZBuffer;
     }
@@ -450,13 +447,6 @@ void vtkCompositeZPass::Render(const vtkRenderState *s)
       this->ZTexture->CreateDepth(dims[0],dims[1],vtkTextureObject::Native,
                                   this->PBO);
 
-      // Apply TO on quad with special zcomposite fragment shader.
-      glPushAttrib(GL_DEPTH_BUFFER_BIT|GL_COLOR_BUFFER_BIT);
-      glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
-      glEnable(GL_DEPTH_TEST);
-      glDepthMask(GL_TRUE);
-      glDepthFunc(GL_LEQUAL);
-
       if(this->Program==0)
         {
         this->CreateProgram(context);
@@ -467,10 +457,23 @@ void vtkCompositeZPass::Render(const vtkRenderState *s)
 #endif
 
 #ifdef VTKGL2
+      // Apply TO on quad with special zcomposite fragment shader.
+      glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+      glEnable(GL_DEPTH_TEST);
+      glDepthMask(GL_TRUE);
+      glDepthFunc(GL_LEQUAL);
+
       context->GetShaderCache()->ReadyShader(this->Program->Program);
       this->ZTexture->Activate();
       this->Program->Program->SetUniformi("depth", this->ZTexture->GetTextureUnit());
 #else
+      // Apply TO on quad with special zcomposite fragment shader.
+      glPushAttrib(GL_DEPTH_BUFFER_BIT|GL_COLOR_BUFFER_BIT);
+      glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+      glEnable(GL_DEPTH_TEST);
+      glDepthMask(GL_TRUE);
+      glDepthFunc(GL_LEQUAL);
+
       vtkTextureUnitManager *tu=context->GetTextureUnitManager();
       int sourceId=tu->Allocate();
 
@@ -537,7 +540,9 @@ void vtkCompositeZPass::Render(const vtkRenderState *s)
       outfile06.close();
 #endif
 
+#ifndef VTKGL2
       glPopAttrib();
+#endif
 
 #ifdef VTK_COMPOSITE_ZPASS_DEBUG
       state->Update();

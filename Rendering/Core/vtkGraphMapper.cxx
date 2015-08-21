@@ -157,10 +157,7 @@ vtkGraphMapper::~vtkGraphMapper()
   this->VertexLookupTable = 0;
   this->EdgeLookupTable->Delete();
   this->EdgeLookupTable = 0;
-  if(this->ScalingArrayName!=0)
-    {
-    delete[] this->ScalingArrayName;
-    }
+  delete[] this->ScalingArrayName;
 }
 
 //----------------------------------------------------------------------------
@@ -439,9 +436,21 @@ vtkGraph *vtkGraphMapper::GetInput()
 //----------------------------------------------------------------------------
 void vtkGraphMapper::ReleaseGraphicsResources( vtkWindow *renWin )
 {
-  if (this->EdgeMapper)
+  if (this->EdgeActor)
     {
-    this->EdgeMapper->ReleaseGraphicsResources( renWin );
+    this->EdgeActor->ReleaseGraphicsResources( renWin );
+    }
+  if (this->VertexActor)
+    {
+    this->VertexActor->ReleaseGraphicsResources( renWin );
+    }
+  if (this->OutlineActor)
+    {
+    this->OutlineActor->ReleaseGraphicsResources( renWin );
+    }
+  if (this->IconActor)
+    {
+    this->IconActor->ReleaseGraphicsResources( renWin );
     }
 }
 

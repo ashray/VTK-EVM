@@ -15,6 +15,7 @@
 
 #include "vtkglVBOHelper.h"
 
+#include "vtkHardwareSelector.h"
 #include "vtkMath.h"
 #include "vtkObjectFactory.h"
 #include "vtkMatrix4x4.h"
@@ -28,7 +29,7 @@
 #include "vtkShaderProgram.h"
 
 #include "vtkPointGaussianVS.h"
-#include "vtkglPolyDataFSNoLighting.h"
+#include "vtkglPolyDataFS.h"
 
 using vtkgl::substitute;
 
@@ -78,6 +79,11 @@ protected:
 
   virtual void RenderPieceDraw(vtkRenderer *ren, vtkActor *act);
 
+  // Description:
+  // Does the shader source need to be recomputed
+  virtual bool GetNeedToRebuildShader(vtkgl::CellBO &cellBO,
+    vtkRenderer *ren, vtkActor *act);
+
 private:
   vtkOpenGLPointGaussianMapperHelper(const vtkOpenGLPointGaussianMapperHelper&); // Not implemented.
   void operator=(const vtkOpenGLPointGaussianMapperHelper&); // Not implemented.
@@ -102,7 +108,7 @@ void vtkOpenGLPointGaussianMapperHelper::GetShaderTemplate(std::string &VSSource
                                           vtkActor *vtkNotUsed(actor))
 {
   VSSource = vtkPointGaussianVS;
-  FSSource = vtkglPolyDataFSNoLighting;
+  FSSource = vtkglPolyDataFS;
   GSSource = "";
 }
 
@@ -126,13 +132,46 @@ void vtkOpenGLPointGaussianMapperHelper::ReplaceShaderValues(std::string &VSSour
     // compute the eye position and unit direction
     "//VTK::Color::Impl\n"
     "  float dist2 = dot(offsetVC.xy,offsetVC.xy);\n"
-    "  float gaussian = exp(-0.5*16.0*dist2);\n"
-//    "  diffuseColor = vertexColor.rgb;\n"
-//    "  ambientColor = vertexColor.rgb;\n"
+    "  if (dist2 > 9.0) { discard; }\n"
+    "  float gaussian = exp(-0.5*dist2);\n"
     "  opacity = opacity*gaussian;"
+//    "  opacity = opacity*0.5;"
     , false);
 
   this->Superclass::ReplaceShaderValues(VSSource,FSSource,GSSource,lightComplexity,ren,actor);
+}
+
+//-----------------------------------------------------------------------------
+bool vtkOpenGLPointGaussianMapperHelper::GetNeedToRebuildShader(
+  vtkgl::CellBO &cellBO, vtkRenderer* ren, vtkActor *actor)
+{
+  this->LastLightComplexity = 0;
+
+  vtkHardwareSelector* selector = ren->GetSelector();
+  int picking = selector ? selector->GetCurrentPass() : -1;
+  if (this->LastSelectionState != picking)
+    {
+    this->SelectionStateChanged.Modified();
+    this->LastSelectionState = picking;
+    }
+
+  // has something changed that would require us to recreate the shader?
+  // candidates are
+  // property modified (representation interpolation and lighting)
+  // input modified
+  // light complexity changed
+  if (cellBO.Program == 0 ||
+      cellBO.ShaderSourceTime < this->GetMTime() ||
+      cellBO.ShaderSourceTime < actor->GetMTime() ||
+      cellBO.ShaderSourceTime < this->CurrentInput->GetMTime() ||
+      cellBO.ShaderSourceTime < this->SelectionStateChanged ||
+      cellBO.ShaderSourceTime < this->DepthPeelingChanged ||
+      cellBO.ShaderSourceTime < this->LightComplexityChanged)
+    {
+    return true;
+    }
+
+  return false;
 }
 
 //-----------------------------------------------------------------------------
@@ -197,32 +236,14 @@ void vtkOpenGLPointGaussianMapperHelper::SetMapperShaderParameters(vtkgl::CellBO
 namespace
 {
 // internal function called by CreateVBO
-vtkgl::VBOLayout vtkOpenGLPointGaussianMapperHelperCreateVBO(float * points, vtkIdType numPts,
+template< typename PointDataType, typename SizeDataType >
+void vtkOpenGLPointGaussianMapperHelperPackVBOTemplate2(
+              std::vector< float >::iterator& it,
+              PointDataType* points, vtkIdType numPts,
               unsigned char *colors, int colorComponents,
-              float *sizes, float defaultSize,
-              vtkgl::BufferObject &vertexBuffer)
+              SizeDataType* sizes, float defaultSize)
 {
-  vtkgl::VBOLayout layout;
-  // Figure out how big each block will be, currently 6 floats.
-  int blockSize = 3;  // x y z
-  layout.VertexOffset = 0;
-  layout.NormalOffset = 0;
-  layout.TCoordOffset = 0;
-  layout.TCoordComponents = 0;
-  layout.ColorComponents = colorComponents;
-  layout.ColorOffset = sizeof(float) * blockSize;
-  ++blockSize; // color
-
-  // two more floats
-  blockSize += 2;  // offset
-  layout.Stride = sizeof(float) * blockSize;
-
-  // Create a buffer, and copy the data over.
-  std::vector<float> packedVBO;
-  packedVBO.resize(blockSize * numPts*3);
-  std::vector<float>::iterator it = packedVBO.begin();
-
-  float *pointPtr;
+  PointDataType *pointPtr;
   unsigned char *colorPtr;
 
   float cos30 = cos(vtkMath::RadiansFromDegrees(30.0));
@@ -234,6 +255,7 @@ vtkgl::VBOLayout vtkOpenGLPointGaussianMapperHelperCreateVBO(float * points, vtk
     pointPtr = points + i*3;
     colorPtr = colors ? (colors + i*colorComponents) : white;
     float radius = sizes ? sizes[i] : defaultSize;
+    radius *= 3.0;
 
     // Vertices
     *(it++) = pointPtr[0];
@@ -257,8 +279,70 @@ vtkgl::VBOLayout vtkOpenGLPointGaussianMapperHelperCreateVBO(float * points, vtk
     *(it++) = 0.0f;
     *(it++) = 2.0f*radius;
     }
+}
+
+template< typename PointDataType >
+void vtkOpenGLPointGaussianMapperHelperPackVBOTemplate(
+    std::vector< float >::iterator& it,
+    PointDataType* points, vtkIdType numPts,
+    unsigned char *colors, int colorComponents,
+    vtkDataArray* sizes, float defaultSize)
+{
+  if (sizes)
+    {
+    switch (sizes->GetDataType())
+      {
+    vtkTemplateMacro(
+          vtkOpenGLPointGaussianMapperHelperPackVBOTemplate2(
+            it, points, numPts, colors, colorComponents,
+            static_cast<VTK_TT*>(sizes->GetVoidPointer(0)),
+            defaultSize)
+          );
+      }
+    }
+  else
+    {
+    vtkOpenGLPointGaussianMapperHelperPackVBOTemplate2(
+          it, points, numPts, colors, colorComponents,
+          static_cast<float*>(NULL), defaultSize);
+    }
+}
+
+vtkgl::VBOLayout vtkOpenGLPointGaussianMapperHelperCreateVBO(
+    vtkPoints* points, unsigned char* colors, int colorComponents,
+    vtkDataArray* sizes, float defaultSize, vtkgl::BufferObject& vertexBuffer)
+{
+
+  vtkgl::VBOLayout layout;
+  // Figure out how big each block will be, currently 6 floats.
+  int blockSize = 3;  // x y z
+  layout.VertexOffset = 0;
+  layout.NormalOffset = 0;
+  layout.TCoordOffset = 0;
+  layout.TCoordComponents = 0;
+  layout.ColorComponents = colorComponents;
+  layout.ColorOffset = sizeof(float) * blockSize;
+  ++blockSize; // color
+
+  // two more floats
+  blockSize += 2;  // offset
+  layout.Stride = sizeof(float) * blockSize;
+
+  // Create a buffer, and copy the data over.
+  std::vector<float> packedVBO;
+  packedVBO.resize(blockSize * points->GetNumberOfPoints() * 3);
+  std::vector<float>::iterator it = packedVBO.begin();
+
+  switch(points->GetDataType())
+    {
+    vtkTemplateMacro(
+          vtkOpenGLPointGaussianMapperHelperPackVBOTemplate(
+            it, static_cast<VTK_TT*>(points->GetVoidPointer(0)),
+            points->GetNumberOfPoints(),colors,colorComponents,
+            sizes,defaultSize));
+    }
   vertexBuffer.Upload(packedVBO, vtkgl::BufferObject::ArrayBuffer);
-  layout.VertexCount = numPts*3;
+  layout.VertexCount = points->GetNumberOfPoints() * 3;
   return layout;
 }
 }
@@ -316,12 +400,12 @@ void vtkOpenGLPointGaussianMapperHelper::BuildBufferObjects(
   // Iterate through all of the different types in the polydata, building OpenGLs
   // and IBOs as appropriate for each type.
   this->Layout =
-    vtkOpenGLPointGaussianMapperHelperCreateVBO(static_cast<float *>(poly->GetPoints()->GetVoidPointer(0)),
-              poly->GetPoints()->GetNumberOfPoints(),
-              this->Colors ? (unsigned char *)this->Colors->GetVoidPointer(0) : NULL,
+    vtkOpenGLPointGaussianMapperHelperCreateVBO(
+              poly->GetPoints(),
+              this->Colors ? (unsigned char *)this->Colors->GetVoidPointer(0) : (unsigned char*)NULL,
               this->Colors ? this->Colors->GetNumberOfComponents() : 0,
-              hasScaleArray ? static_cast<float *>(poly->GetPointData()->GetArray(
-                this->Owner->GetScaleArray())->GetVoidPointer(0)) : NULL,
+              hasScaleArray ? poly->GetPointData()->GetArray(
+                this->Owner->GetScaleArray()) : (vtkDataArray*)NULL,
               this->Owner->GetDefaultRadius(),
               this->VBO);
 
@@ -338,7 +422,6 @@ void vtkOpenGLPointGaussianMapperHelper::RenderPieceDraw(vtkRenderer* ren, vtkAc
   vtkgl::VBOLayout &layout = this->Layout;
 
   // draw polygons
-  glDepthMask(GL_FALSE);
   glBlendFunc( GL_SRC_ALPHA, GL_ONE);  // additive for emissive sources
   if (layout.VertexCount)
     {
@@ -381,6 +464,12 @@ void vtkOpenGLPointGaussianMapper::ReleaseGraphicsResources(vtkWindow* win)
   this->Helper->ReleaseGraphicsResources(win);
   this->Helper->SetInputData(0);
   this->Modified();
+}
+
+//-----------------------------------------------------------------------------
+bool vtkOpenGLPointGaussianMapper::GetIsOpaque()
+{
+  return false;
 }
 
 //-----------------------------------------------------------------------------

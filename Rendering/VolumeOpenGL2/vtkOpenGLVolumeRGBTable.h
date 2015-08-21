@@ -43,22 +43,29 @@ public:
       this->TextureObject->Delete();
       this->TextureObject = 0;
       }
-    if(this->Table)
-      {
-      delete[] this->Table;
-      this->Table=0;
-      }
+    delete[] this->Table;
     }
 
-  // Bind texture.
+  // Activate texture.
   //--------------------------------------------------------------------------
-  void Bind(void)
+  void Activate()
     {
     if (!this->TextureObject)
       {
       return;
       }
     this->TextureObject->Activate();
+    }
+
+  // Deactivate texture.
+  //--------------------------------------------------------------------------
+  void Deactivate()
+    {
+    if (!this->TextureObject)
+      {
+      return;
+      }
+    this->TextureObject->Deactivate();
     }
 
   // Update color transfer function texture.
@@ -105,7 +112,6 @@ public:
                                            VTK_FLOAT,
                                            this->Table);
       this->LastInterpolation = filterValue;
-      this->TextureObject->Activate();
       this->BuildTime.Modified();
       }
 

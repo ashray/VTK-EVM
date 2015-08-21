@@ -60,17 +60,23 @@ inline GLenum convertTypeToGL(int type)
 
 vtkStandardNewMacro(vtkShaderProgram)
 
-vtkShaderProgram::vtkShaderProgram() : Handle(0), VertexShaderHandle(0),
-  FragmentShaderHandle(0), Linked(false), Bound(false)
+vtkShaderProgram::vtkShaderProgram()
 {
-    this->VertexShader = vtkShader::New();
-    this->VertexShader->SetType(vtkShader::Vertex);
-    this->FragmentShader = vtkShader::New();
-    this->FragmentShader->SetType(vtkShader::Fragment);
-    this->GeometryShader = vtkShader::New();
-    this->GeometryShader->SetType(vtkShader::Geometry);
+  this->VertexShader = vtkShader::New();
+  this->VertexShader->SetType(vtkShader::Vertex);
+  this->FragmentShader = vtkShader::New();
+  this->FragmentShader->SetType(vtkShader::Fragment);
+  this->GeometryShader = vtkShader::New();
+  this->GeometryShader->SetType(vtkShader::Geometry);
 
-    this->Compiled = false;
+  this->Compiled = false;
+  this->NumberOfOutputs = 0;
+  this->Handle = 0;
+  this->VertexShaderHandle = 0;
+  this->FragmentShaderHandle = 0;
+  this->GeometryShaderHandle = 0;
+  this->Linked = false;
+  this->Bound = false;
 }
 
 vtkShaderProgram::~vtkShaderProgram()
@@ -133,21 +139,30 @@ bool vtkShaderProgram::AttachShader(const vtkShader *shader)
 
   if (shader->GetType() == vtkShader::Vertex)
     {
-    if (VertexShaderHandle != 0)
+    if (this->VertexShaderHandle != 0)
       {
-      glDetachShader(static_cast<GLuint>(Handle),
-                     static_cast<GLuint>(VertexShaderHandle));
+      glDetachShader(static_cast<GLuint>(this->Handle),
+                     static_cast<GLuint>(this->VertexShaderHandle));
       }
     this->VertexShaderHandle = shader->GetHandle();
     }
   else if (shader->GetType() == vtkShader::Fragment)
     {
-    if (FragmentShaderHandle != 0)
+    if (this->FragmentShaderHandle != 0)
       {
-      glDetachShader(static_cast<GLuint>(Handle),
-                     static_cast<GLuint>(FragmentShaderHandle));
+      glDetachShader(static_cast<GLuint>(this->Handle),
+                     static_cast<GLuint>(this->FragmentShaderHandle));
       }
     this->FragmentShaderHandle = shader->GetHandle();
+    }
+  else if (shader->GetType() == vtkShader::Geometry)
+    {
+    if (this->GeometryShaderHandle != 0)
+      {
+      glDetachShader(static_cast<GLuint>(this->Handle),
+                     static_cast<GLuint>(this->GeometryShaderHandle));
+      }
+    this->GeometryShaderHandle = shader->GetHandle();
     }
   else
     {
@@ -208,6 +223,20 @@ bool vtkShaderProgram::DetachShader(const vtkShader *shader)
         this->Linked = false;
         return true;
         }
+    case vtkShader::Geometry:
+      if (this->GeometryShaderHandle != shader->GetHandle())
+        {
+        this->Error = "The supplied shader was not attached to this program.";
+        return false;
+        }
+      else
+        {
+        glDetachShader(static_cast<GLuint>(this->Handle),
+                       static_cast<GLuint>(shader->GetHandle()));
+        this->GeometryShaderHandle = 0;
+        this->Linked = false;
+        return true;
+        }
     default:
       return false;
     }
@@ -225,6 +254,22 @@ bool vtkShaderProgram::Link()
     this->Error = "Program has not been initialized, and/or does not have shaders.";
     return false;
     }
+
+#if GL_ES_VERSION_2_0 != 1
+  // bind the outputs if specified
+  if (this->NumberOfOutputs)
+    {
+    for (unsigned int i = 0; i < this->NumberOfOutputs; i++)
+      {
+      // this naming has to match the bindings
+      // in vtkOpenGLShaderCache.cxx
+      std::ostringstream dst;
+      dst << "fragOutput" << i;
+      glBindFragDataLocation(static_cast<GLuint>(this->Handle), i,
+        dst.str().c_str());
+      }
+    }
+#endif
 
   GLint isCompiled;
   glLinkProgram(static_cast<GLuint>(this->Handle));
@@ -292,12 +337,34 @@ int vtkShaderProgram::CompileShader()
     vtkErrorMacro(<< this->GetFragmentShader()->GetError());
     return 0;
     }
+  if (this->GetGeometryShader()->GetSource().size() > 0 &&
+      !this->GetGeometryShader()->Compile())
+    {
+    int lineNum = 1;
+    std::istringstream stream(this->GetGeometryShader()->GetSource());
+    std::stringstream sstm;
+    std::string aline;
+    while (std::getline(stream, aline))
+      {
+      sstm << lineNum << ": " << aline << "\n";
+      lineNum++;
+      }
+    vtkErrorMacro(<< sstm.str());
+    vtkErrorMacro(<< this->GetGeometryShader()->GetError());
+    return 0;
+    }
   if (!this->AttachShader(this->GetVertexShader()))
     {
     vtkErrorMacro(<< this->GetError());
     return 0;
     }
   if (!this->AttachShader(this->GetFragmentShader()))
+    {
+    vtkErrorMacro(<< this->GetError());
+    return 0;
+    }
+  if (this->GetGeometryShader()->GetSource().size() > 0 &&
+      !this->AttachShader(this->GetGeometryShader()))
     {
     vtkErrorMacro(<< this->GetError());
     return 0;
@@ -328,8 +395,10 @@ void vtkShaderProgram::ReleaseGraphicsResources(vtkWindow *win)
     {
     this->DetachShader(this->VertexShader);
     this->DetachShader(this->FragmentShader);
+    this->DetachShader(this->GeometryShader);
     this->VertexShader->Cleanup();
     this->FragmentShader->Cleanup();
+    this->GeometryShader->Cleanup();
     this->Compiled = false;
     }
 

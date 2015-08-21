@@ -50,8 +50,8 @@ void vtkOpenGLActor::Render(vtkRenderer *ren, vtkMapper *mapper)
   vtkOpenGLClearErrorMacro();
 
   // get opacity
-  double opacity = this->GetProperty()->GetOpacity();
-  if (opacity == 1.0)
+  bool opaque = (this->GetIsOpaque() != 0);
+  if (opaque)
     {
     glDepthMask(GL_TRUE);
     }
@@ -79,7 +79,7 @@ void vtkOpenGLActor::Render(vtkRenderer *ren, vtkMapper *mapper)
   // send a render to the mapper; update pipeline
   mapper->Render(ren, this);
 
-  if (opacity != 1.0)
+  if (!opaque)
     {
     glDepthMask(GL_TRUE);
     }
@@ -124,14 +124,4 @@ void vtkOpenGLActor::GetKeyMatrices(vtkMatrix4x4 *&mcwc, vtkMatrix3x3 *&normMat)
 
   mcwc = this->MCWCMatrix;
   normMat = this->NormalMatrix;
-}
-
-vtkIdType vtkOpenGLActor::GetConvertedPickValue(vtkIdType idIn, int fieldassociation)
-{
-  vtkOpenGLPolyDataMapper *pdm = vtkOpenGLPolyDataMapper::SafeDownCast(this->GetMapper());
-  if (pdm)
-    {
-    return pdm->GetConvertedPickValue(idIn, fieldassociation,this);
-    }
-  return idIn;
 }

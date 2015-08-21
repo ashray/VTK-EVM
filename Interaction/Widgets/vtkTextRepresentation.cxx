@@ -20,6 +20,7 @@
 #include "vtkRenderer.h"
 #include "vtkStdString.h"
 #include "vtkCommand.h"
+#include "vtkWindow.h"
 
 class vtkTextRepresentationObserver : public vtkCommand
 {
@@ -270,9 +271,16 @@ void vtkTextRepresentation::CheckTextBoundary()
 
     this->TextActor->ComputeScaledFont(this->GetRenderer());
 
+    vtkWindow *win = this->Renderer->GetVTKWindow();
+    if (!win)
+      {
+      vtkErrorMacro(<<"No render window available: cannot determine DPI.");
+      return;
+      }
+
     int text_bbox[4];
     if (!tren->GetBoundingBox(this->TextActor->GetScaledTextProperty(),
-                              this->GetText(), text_bbox))
+                              this->GetText(), text_bbox, win->GetDPI()))
       {
       return;
       }
@@ -374,15 +382,21 @@ void vtkTextRepresentation::PrintSelf(ostream& os, vtkIndent indent)
     {
     case LowerLeftCorner:
       os << "LowerLeftCorner\n";
+      break;
     case LowerRightCorner:
       os << "LowerRightCorner\n";
+      break;
     case LowerCenter:
       os << "LowerCenter\n";
+      break;
     case UpperLeftCorner:
       os << "UpperLeftCorner\n";
+      break;
     case UpperRightCorner:
       os << "UpperRightCorner\n";
+      break;
     case UpperCenter:
       os << "UpperCenter\n";
+      break;
     }
 }
